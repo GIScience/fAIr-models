@@ -325,7 +325,8 @@ def test_setup_register_base_model_and_register_dataset_paths(monkeypatch, tmp_p
         "ensure_knative_service",
         lambda published: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    assert client.register_base_model("base.json") == "resnet18-classification"
+    with pytest.raises(RuntimeError, match="boom"):
+        client.register_base_model("base.json")
 
     source_labels = tmp_path / "labels.geojson"
     source_labels.write_text("{}")
@@ -342,8 +343,9 @@ def test_setup_register_base_model_and_register_dataset_paths(monkeypatch, tmp_p
     monkeypatch.setattr(client_module, "build_dataset_item", lambda **kwargs: published_dataset)
     monkeypatch.setattr(client_module, "validate_item", lambda _: [])
 
-    assert client._register_dataset_from_item("dataset.json") == "published-dataset"
+    assert client._register_dataset_from_item("dataset.json", user_id="anonymous") == "published-dataset"
     assert client.register_dataset("dataset.json") == "published-dataset"
+    assert client.register_dataset("dataset.json", user_id="other-user") == "published-dataset"
 
     monkeypatch.setattr(
         client_module,
@@ -362,7 +364,7 @@ def test_setup_register_base_model_and_register_dataset_paths(monkeypatch, tmp_p
         user_id="tester",
         providers=[{"name": "provider"}],
     )
-    assert client._register_dataset_from_params(params) == "params-dataset"
+    assert client._register_dataset_from_params(params, user_id="anonymous") == "params-dataset"
     assert client.register_dataset(params) == "params-dataset"
 
 
