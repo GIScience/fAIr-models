@@ -1,7 +1,3 @@
-# image:
-#   repository: mlflow/mlflow
-#   tag: "v3.9.0"
-
 backendStore:
   databaseMigration: true
   postgres:
@@ -20,13 +16,13 @@ artifactRoot:
     awsSecretAccessKey: minioadmin
 
 resources:
-  requests:
-    cpu: 100m
-    memory: 512Mi
-  limits:
-    cpu: 500m
-    memory: 1Gi
+  requests: { cpu: 100m, memory: 512Mi }
+  limits: { cpu: 500m, memory: 1Gi }
 
 extraEnvVars:
   MLFLOW_S3_ENDPOINT_URL: http://minio.fair.svc:9000
   MLFLOW_SERVER_ALLOWED_HOSTS: "*"
+{{- with .Values.infraNodeSelector }}
+nodeSelector:
+{{ toYaml . | indent 2 }}
+{{- end }}
