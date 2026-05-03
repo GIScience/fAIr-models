@@ -701,3 +701,19 @@ class TestHyperparametersSpecCoverage:
         item.properties.pop("fair:hyperparameters_spec", None)
         errors = validate_item(item)
         assert not any("has no matching entry in fair:hyperparameters_spec" in e for e in errors)
+
+
+class TestRegisterFairSchemas:
+    def test_returns_early_when_validator_is_not_jsonschema(self, monkeypatch) -> None:
+        from pystac.validation import RegisteredValidator
+
+        from fair.schemas import register_fair_schemas
+
+        class _NonJsonValidator:
+            def __init__(self) -> None:
+                self.schema_cache: dict[str, object] = {}
+
+        instance = _NonJsonValidator()
+        monkeypatch.setattr(RegisteredValidator, "get_validator", staticmethod(lambda: instance))
+        register_fair_schemas()
+        assert instance.schema_cache == {}
