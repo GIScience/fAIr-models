@@ -5,10 +5,6 @@ ns := "fair"
 kind_cluster := "fair"
 pid_file := ".port-forward.pids"
 
-# ---------------------------------------------------------------------------
-# Public commands. Pass `dok8s` as first arg to target DigitalOcean instead of kind.
-# ---------------------------------------------------------------------------
-
 [doc('Deploy the full stack (default kind, pass `dok8s` for DigitalOcean)')]
 up env="dev":
     @if [[ "{{ env }}" == "dok8s" ]]; then just _up-dok8s; else just _up-dev; fi
@@ -48,10 +44,6 @@ predict:
         printf "%-30s " "$svc"
         if curl -sfk --max-time 30 "$url" >/dev/null; then echo "ok"; else echo "fail ($url)"; fi
     done
-
-# ---------------------------------------------------------------------------
-# Internals: dev (kind)
-# ---------------------------------------------------------------------------
 
 _up-dev: _ensure-kind _apply-postgres _helmfile-dev _port-forward _seed-dev _stack-register-dev
     @just _urls-dev
@@ -122,7 +114,6 @@ _stack-register-dev:
     uv run zenml stack set k8s
 
 _down-dev: _kill-port-forward
-    @echo "Port-forwards stopped. 'just up' to resume."
 
 _tear-dev: _kill-port-forward
     -helmfile -e dev destroy
@@ -150,10 +141,6 @@ _example-dev:
             FAIR_DSN=postgresql://postgres:postgres@localhost:5432/fair_models \
                 uv run --group example python "examples/$ex/run.py"
     done
-
-# ---------------------------------------------------------------------------
-# Internals: dok8s (DigitalOcean)
-# ---------------------------------------------------------------------------
 
 _up-dok8s: _tofu-apply _save-kubeconfig _apply-postgres _helmfile-dok8s _post-deploy-dok8s _seed-dok8s _stack-register-dok8s _write-env-dok8s
     @just _urls-dok8s
@@ -249,11 +236,10 @@ _stack-register-dok8s:
     envsubst < ../stacks/dok8s.yaml > dok8s/.dok8s-stack-resolved.yaml
     uv run zenml stack set default 2>/dev/null || true
     echo y | uv run zenml stack delete dok8s 2>/dev/null || true
-    for kind in orchestrator artifact-store experiment-tracker container-registry; do
-        for name in doks_orchestrator s3_artifacts mlflow_tracker ghcr; do
-            echo y | uv run zenml $kind delete $name 2>/dev/null || true
-        done
-    done
+    echo y | uv run zenml orchestrator delete doks_orchestrator 2>/dev/null || true
+    echo y | uv run zenml artifact-store delete s3_artifacts 2>/dev/null || true
+    echo y | uv run zenml experiment-tracker delete mlflow_tracker 2>/dev/null || true
+    echo y | uv run zenml container-registry delete ghcr 2>/dev/null || true
     uv run zenml stack import dok8s -f dok8s/.dok8s-stack-resolved.yaml --ignore-version-mismatch
     uv run zenml stack set dok8s
     rm -f dok8s/.dok8s-stack-resolved.yaml

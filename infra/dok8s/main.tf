@@ -16,8 +16,6 @@ provider "digitalocean" {
   token = var.do_token
 }
 
-# ---------- DOKS cluster ----------
-
 data "digitalocean_kubernetes_versions" "this" {}
 
 resource "digitalocean_kubernetes_cluster" "this" {
@@ -48,12 +46,6 @@ resource "digitalocean_kubernetes_node_pool" "ml" {
     "${var.domain}/inference" = "true"
   }
 }
-
-# ---------- Helmfile env file ----------
-# Plain .env file consumed by `helmfile -e dok8s` and the justfile post-deploy steps.
-# Keeps non-secret bootstrap values (domain, admin users) and the secrets needed
-# for chart values rendering. Generated from tfvars rather than tfstate so it
-# never contains cluster credentials.
 
 resource "local_file" "env_helmfile" {
   filename        = "${path.module}/.env.helmfile"
