@@ -146,6 +146,89 @@ def test_api_key_attached_as_bearer() -> None:
     assert seen["auth"] == "Bearer secret-token-123"
 
 
+def test_init_bootstraps_collections_via_post_and_put() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.method == "GET" and "/collections/" in request.url.path:
+            collection_id = request.url.path.rsplit("/", 1)[-1]
+            if collection_id == "datasets":
+                return httpx.Response(200, json={"id": collection_id})
+            return httpx.Response(404)
+        if request.method == "POST" and request.url.path.endswith("/collections"):
+            return httpx.Response(201, json={})
+        if request.method == "PUT" and "/collections/" in request.url.path:
+            return httpx.Response(200, json={})
+        return httpx.Response(500)
+
+    transport = httpx.MockTransport(handler)
+    backend = StacApiBackend.__new__(StacApiBackend)
+    backend._stac_api_url = "https://stac.example/api"
+    backend._http = httpx.Client(transport=transport)
+    backend._bootstrap_collections()
+
+    methods = {(method, path.split("/")[-1]) for method, path in seen}
+    assert ("PUT", "datasets") in methods
+    assert ("POST", "collections") in methods
+
+
+def test_init_attaches_bearer_token_via_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth_seen.setdefault("auth", request.headers.get("authorization", ""))
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "x"})
+        return httpx.Response(200, json={})
+
+    real_client = httpx.Client
+    transport = httpx.MockTransport(handler)
+
+    def fake_client(*, timeout: float, headers: dict[str, str]) -> httpx.Client:
+        return real_client(timeout=timeout, headers=headers, transport=transport)
+
+    monkeypatch.setattr("fair.stac.api_backend.httpx.Client", fake_client)
+    StacApiBackend("https://stac.example/api/", api_key="tkn-xyz")
+
+    assert auth_seen["auth"] == "Bearer tkn-xyz"
+
+
+def test_upsert_collection_propagates_unexpected_get_status() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    backend = _make_backend(handler)
+    collection = pystac.Collection(
+        id="datasets",
+        description="d",
+        extent=pystac.Extent(
+            pystac.SpatialExtent([[-1, -1, 1, 1]]),
+            pystac.TemporalExtent([[datetime.now(UTC), None]]),
+        ),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        backend._upsert_collection(collection)
+
+
+def test_item_exists_raises_on_unexpected_status() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.item_exists("datasets", "ds-1")
+
+
+def test_delete_item_raises_on_unexpected_status() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.delete_item("datasets", "ds-1")
+
+
 def test_deprecate_item_sets_flag_and_republishes() -> None:
     deprecated = [False]
     calls: list[tuple[str, str]] = []
