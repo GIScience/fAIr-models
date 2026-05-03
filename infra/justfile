@@ -104,11 +104,11 @@ _seed-dev:
 _stack-register-dev:
     #!/usr/bin/env bash
     set -euo pipefail
-    for i in 1 2 3 4 5; do
-        uv run zenml connect --url http://localhost:8080 --username default --password '' --no-verify-ssl && break
-        echo "zenml connect: attempt $i, retrying in 5s..." >&2
-        sleep 5
-    done
+    export ZENML_URL="http://localhost:8080"
+    export ZENML_ADMIN_USER="default"
+    export ZENML_ADMIN_PASSWORD=""
+    export ZENML_STORE_URL="$ZENML_URL"
+    export ZENML_STORE_API_TOKEN="$(scripts/zenml-token.sh --wait)"
     uv run zenml stack import dev -f ../stacks/local.yaml --ignore-version-mismatch || true
     uv run zenml stack import k8s -f ../stacks/k8s.yaml --ignore-version-mismatch || true
     uv run zenml stack set k8s
