@@ -204,9 +204,10 @@ class FairClient:
 
         published = cat.publish_item(BASE_MODELS_COLLECTION, item)
 
-        from fair.infra.knative import ensure_knative_service
+        if self._stac_api_url:
+            from fair.infra.knative import ensure_knative_service
 
-        ensure_knative_service(published)
+            ensure_knative_service(published)
         print(f"register: base-model {published.id} v{published.properties['version']}")
         return published.id
 
@@ -346,22 +347,16 @@ class FairClient:
         try:
             ds = cat.get_item(DATASETS_COLLECTION, dataset_id)
         except KeyError as exc:
-            raise FairClientError(
-                f"Dataset '{dataset_id}' not found. Run register_dataset first."
-            ) from exc
+            raise FairClientError(f"Dataset '{dataset_id}' not found. Run register_dataset first.") from exc
 
         if errs := validate_compatibility(base, ds):
             raise FairClientError(f"Incompatible: {errs}")
 
         pipeline_module = self._pipeline_module_from_item(base)
-        trackers = Client().active_stack_model.components.get(
-            StackComponentType.EXPERIMENT_TRACKER, []
-        )
+        trackers = Client().active_stack_model.components.get(StackComponentType.EXPERIMENT_TRACKER, [])
         tracker_name = trackers[0].name if trackers else None
 
-        cfg_data = generate_training_config(
-            base, ds, model_name, overrides, experiment_tracker=tracker_name
-        )
+        cfg_data = generate_training_config(base, ds, model_name, overrides, experiment_tracker=tracker_name)
         cfg_dir = Path(config_dir) if config_dir else self._config_dir
         cfg_dir.mkdir(parents=True, exist_ok=True)
         train_cfg = cfg_dir / f"train_{model_name}.yaml"
@@ -383,9 +378,7 @@ class FairClient:
             model_name=model_name,
             overrides=overrides,
         )
-        run = mod.training_pipeline.with_options(
-            config_path=str(train_cfg), enable_cache=False
-        )()
+        run = mod.training_pipeline.with_options(config_path=str(train_cfg), enable_cache=False)()
         if run is None:
             raise RuntimeError("Training pipeline returned no run")
         print(f"finetune: {run.id} ({run.status})")
@@ -563,9 +556,7 @@ class FairClient:
         try:
             model_item = cat.get_item(LOCAL_MODELS_COLLECTION, local_model_id)
         except KeyError as exc:
-            raise FairClientError(
-                f"Local model '{local_model_id}' not found. Run promote() first."
-            ) from exc
+            raise FairClientError(f"Local model '{local_model_id}' not found. Run promote() first.") from exc
 
         pipeline_module = self._pipeline_module_from_item(model_item)
 
@@ -606,12 +597,8 @@ class FairClient:
         return str(run.id)
 
     def predict(self, local_model_id: str, image_path: str) -> dict[str, Any]:
-        mod, inf_cfg = self._prepare_inference_pipeline(
-            local_model_id=local_model_id, image_path=image_path
-        )
-        run = mod.inference_pipeline.with_options(
-            config_path=str(inf_cfg), enable_cache=False
-        )()
+        mod, inf_cfg = self._prepare_inference_pipeline(local_model_id=local_model_id, image_path=image_path)
+        run = mod.inference_pipeline.with_options(config_path=str(inf_cfg), enable_cache=False)()
         if run is None:
             raise RuntimeError("Inference pipeline returned no run")
         print(f"predict: {run.id} ({run.status})")

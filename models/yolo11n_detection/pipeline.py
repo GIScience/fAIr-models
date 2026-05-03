@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from zenml import log_metadata, pipeline, step
 
 from fair.zenml.instrumentation import log_evaluation_results, mlflow_training_context
-from fair.zenml.materializers import ONNXMaterializer
+from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializer
 
 MODEL_INPUT_SIZE = 640
 CHIP_SIZE = 256
@@ -357,7 +357,7 @@ def split_dataset(
     return split_info
 
 
-@step
+@step(output_materializers={"trained_model": CheckpointBytesMaterializer})
 def train_model(
     dataset_chips: str,
     dataset_labels: str,

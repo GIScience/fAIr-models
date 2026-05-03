@@ -318,6 +318,10 @@ def test_setup_register_base_model_and_register_dataset_paths(monkeypatch, tmp_p
     assert client.register_base_model("base.json") == "resnet18-classification"
     assert item.properties["version"] == "2"
     assert archived == ["done"]
+    assert ensured == [], "local mode (no stac_api_url) must not provision a KNative service"
+
+    client._stac_api_url = "https://stac.example.com"
+    assert client.register_base_model("base.json") == "resnet18-classification"
     assert ensured == ["resnet18-classification"]
 
     monkeypatch.setattr(
@@ -327,6 +331,7 @@ def test_setup_register_base_model_and_register_dataset_paths(monkeypatch, tmp_p
     )
     with pytest.raises(RuntimeError, match="boom"):
         client.register_base_model("base.json")
+    client._stac_api_url = None
 
     source_labels = tmp_path / "labels.geojson"
     source_labels.write_text("{}")

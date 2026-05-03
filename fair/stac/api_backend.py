@@ -117,4 +117,3 @@ class StacApiBackend:
 
     def item_href(self, collection_id: str, item_id: str) -> str:
         return f"{self._stac_api_url}/collections/{collection_id}/items/{item_id}"
-

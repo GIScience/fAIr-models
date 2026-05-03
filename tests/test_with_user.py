@@ -7,7 +7,7 @@ import pytest
 from fair.client import FairClient, UserScopedFairClient
 
 
-def _client_with_stub_backend() -> FairClient:
+def _client_with_stub_backend() -> tuple[FairClient, MagicMock]:
     client = FairClient.__new__(FairClient)
     client._zenml_store_url = None
     client._stac_api_url = None
@@ -16,30 +16,33 @@ def _client_with_stub_backend() -> FairClient:
     client._catalog_path = "stac_catalog/catalog.json"
     client.user_id = "system"
     client._upload_artifacts = False
-    client._cached_backend = MagicMock()
-    return client
+    backend_mock = MagicMock()
+    client._cached_backend = backend_mock
+    return client, backend_mock
 
 
 def test_with_user_returns_proxy_with_correct_user() -> None:
-    client = _client_with_stub_backend()
+    client, _ = _client_with_stub_backend()
     proxy = client.with_user("alice")
     assert isinstance(proxy, UserScopedFairClient)
     assert proxy.user_id == "alice"
 
 
 def test_proxy_register_dataset_stamps_user_id() -> None:
-    client = _client_with_stub_backend()
-    client.register_dataset = MagicMock(return_value="ds-1")  # type: ignore[method-assign]
+    client, _ = _client_with_stub_backend()
+    register_dataset = MagicMock(return_value="ds-1")
+    client.register_dataset = register_dataset  # type: ignore[method-assign]
     proxy = client.with_user("alice")
 
     proxy.register_dataset("path/to/item.json")
 
-    client.register_dataset.assert_called_once_with("path/to/item.json", user_id="alice")
+    register_dataset.assert_called_once_with("path/to/item.json", user_id="alice")
 
 
 def test_proxy_submit_finetune_delegates() -> None:
-    client = _client_with_stub_backend()
-    client.submit_finetune = MagicMock(return_value="run-id")  # type: ignore[method-assign]
+    client, _ = _client_with_stub_backend()
+    submit_finetune = MagicMock(return_value="run-id")
+    client.submit_finetune = submit_finetune  # type: ignore[method-assign]
     proxy = client.with_user("bob")
 
     proxy.submit_finetune(
@@ -49,7 +52,7 @@ def test_proxy_submit_finetune_delegates() -> None:
         overrides={"epochs": 3},
     )
 
-    client.submit_finetune.assert_called_once_with(
+    submit_finetune.assert_called_once_with(
         base_model_id="b-1",
         dataset_id="d-1",
         model_name="m-1",
@@ -59,13 +62,14 @@ def test_proxy_submit_finetune_delegates() -> None:
 
 
 def test_proxy_submit_predict_delegates() -> None:
-    client = _client_with_stub_backend()
-    client.submit_predict = MagicMock(return_value="run-id")  # type: ignore[method-assign]
+    client, _ = _client_with_stub_backend()
+    submit_predict = MagicMock(return_value="run-id")
+    client.submit_predict = submit_predict  # type: ignore[method-assign]
     proxy = client.with_user("carol")
 
     proxy.submit_predict(local_model_id="lm-1", image_path="s3://bucket/img")
 
-    client.submit_predict.assert_called_once_with(
+    submit_predict.assert_called_once_with(
         local_model_id="lm-1",
         image_path="s3://bucket/img",
         config_dir=None,
@@ -73,13 +77,14 @@ def test_proxy_submit_predict_delegates() -> None:
 
 
 def test_proxy_promote_stamps_user_id() -> None:
-    client = _client_with_stub_backend()
-    client.promote = MagicMock(return_value="lm-1")  # type: ignore[method-assign]
+    client, _ = _client_with_stub_backend()
+    promote = MagicMock(return_value="lm-1")
+    client.promote = promote  # type: ignore[method-assign]
     proxy = client.with_user("dave")
 
     proxy.promote("ft-1", description="Looks good")
 
-    client.promote.assert_called_once_with(
+    promote.assert_called_once_with(
         "ft-1",
         base_model_id=None,
         dataset_id=None,
@@ -89,34 +94,35 @@ def test_proxy_promote_stamps_user_id() -> None:
 
 
 def test_proxy_register_base_model_does_not_stamp() -> None:
-    client = _client_with_stub_backend()
-    client.register_base_model = MagicMock(return_value="bm-1")  # type: ignore[method-assign]
+    client, _ = _client_with_stub_backend()
+    register_base_model = MagicMock(return_value="bm-1")
+    client.register_base_model = register_base_model  # type: ignore[method-assign]
     proxy = client.with_user("ignored")
 
     proxy.register_base_model("path/to/base.json")
 
-    client.register_base_model.assert_called_once_with("path/to/base.json")
+    register_base_model.assert_called_once_with("path/to/base.json")
 
 
 def test_proxy_get_item_delegates_to_backend() -> None:
-    client = _client_with_stub_backend()
-    client._cached_backend.get_item.return_value = "item-stub"
+    client, backend_mock = _client_with_stub_backend()
+    backend_mock.get_item.return_value = "item-stub"
     proxy = client.with_user("alice")
 
     result = proxy.get_item("datasets", "ds-1")
 
     assert result == "item-stub"
-    client._cached_backend.get_item.assert_called_once_with("datasets", "ds-1")
+    backend_mock.get_item.assert_called_once_with("datasets", "ds-1")
 
 
 def test_proxy_list_items_passes_limit() -> None:
-    client = _client_with_stub_backend()
-    client._cached_backend.list_items.return_value = []
+    client, backend_mock = _client_with_stub_backend()
+    backend_mock.list_items.return_value = []
     proxy = client.with_user("alice")
 
     proxy.list_items("base-models", limit=5)
 
-    client._cached_backend.list_items.assert_called_once_with("base-models", limit=5)
+    backend_mock.list_items.assert_called_once_with("base-models", limit=5)
 
 
 def test_get_backend_caches_first_call(monkeypatch: pytest.MonkeyPatch) -> None:

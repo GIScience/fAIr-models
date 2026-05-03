@@ -147,19 +147,20 @@ def test_api_key_attached_as_bearer() -> None:
 
 
 def test_deprecate_item_sets_flag_and_republishes() -> None:
-    state = {"deprecated": False, "calls": []}
+    deprecated = [False]
+    calls: list[tuple[str, str]] = []
     item_payload = _build_dummy_item().to_dict()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        state["calls"].append((request.method, request.url.path))
+        calls.append((request.method, request.url.path))
         if request.method == "GET" and request.url.path.endswith("/items/ds-1"):
             return httpx.Response(200, json=item_payload)
         if request.method == "PUT" and request.url.path.endswith("/items/ds-1"):
             body = request.content.decode()
-            state["deprecated"] = '"deprecated":true' in body
+            deprecated[0] = '"deprecated":true' in body
             return httpx.Response(200, json={})
         return httpx.Response(500)
 
     backend = _make_backend(handler)
     backend.deprecate_item("datasets", "ds-1")
-    assert state["deprecated"] is True
+    assert deprecated[0] is True
