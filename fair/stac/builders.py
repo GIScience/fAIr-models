@@ -561,7 +561,13 @@ def build_local_model_item(
         properties["fair:dataset_id"] = dataset_id
 
     # Copy fields from base model that apply to the finetuned variant
-    for field in ("license", "mlm:accelerator", "mlm:accelerator_count", "fair:metrics_spec"):
+    for field in (
+        "license",
+        "mlm:accelerator",
+        "mlm:accelerator_count",
+        "fair:metrics_spec",
+        "fair:hyperparameters_spec",
+    ):
         if field in base_props:
             properties[field] = base_props[field]
 

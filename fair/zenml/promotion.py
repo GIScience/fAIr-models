@@ -11,7 +11,7 @@ from zenml.enums import ModelStages
 from fair.stac.backend import StacBackend
 from fair.stac.builders import build_local_model_item
 from fair.stac.constants import BASE_MODELS_COLLECTION, DATASETS_COLLECTION, LOCAL_MODELS_COLLECTION
-from fair.stac.validators import validate_model_asset_urls
+from fair.stac.validators import validate_item, validate_model_asset_urls
 from fair.stac.versioning import deprecate_and_link_successor, find_previous_active_item
 from fair.utils.data import s3_uri_to_http_url
 from fair.zenml.materializers import ONNX_FILENAME as _FAIR_ONNX_FILENAME
@@ -228,8 +228,11 @@ def publish_promoted_model(
     base_model_item = catalog_manager.get_item(BASE_MODELS_COLLECTION, base_model_item_id)
 
     base_hyperparams = base_model_item.properties.get("mlm:hyperparameters", {}) or {}
+    training_hyperparams = {
+        k if k.startswith(("training.", "inference.")) else f"training.{k}": v for k, v in hyperparams.items()
+    }
     inference_defaults = {k: v for k, v in base_hyperparams.items() if k.startswith("inference.")}
-    hyperparams = {**inference_defaults, **hyperparams}
+    hyperparams = {**inference_defaults, **training_hyperparams}
 
     # Geometry: prefer caller-provided, fallback to dataset item geometry
     dataset_item = catalog_manager.get_item(DATASETS_COLLECTION, dataset_item_id)
@@ -296,11 +299,14 @@ def publish_promoted_model(
     from upath import UPath
 
     if UPath(checkpoint_href).protocol:
+        if errs := validate_item(item):
+            msg = f"Local model schema validation failed: {errs}"
+            raise RuntimeError(msg)
         if errs := validate_model_asset_urls(item, required_keys=("checkpoint", "model")):
             msg = f"Asset URL validation failed after upload: {errs}"
             raise RuntimeError(msg)
     else:
-        log.warning("Local artifact store detected; skipping asset URL reachability check")
+        log.warning("Local artifact store detected; skipping schema and URL reachability checks")
 
     if prev_item:
         deprecate_and_link_successor(catalog_manager, LOCAL_MODELS_COLLECTION, prev_item, self_href)

@@ -64,7 +64,7 @@ def _item(item_id: str = "item", *, keywords: list[str] | None = None) -> pystac
 
 
 def _base_model() -> pystac.Item:
-    return build_base_model_item(
+    item = build_base_model_item(
         item_id="example-model",
         geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
         mlm_name="example-model",
@@ -75,6 +75,13 @@ def _base_model() -> pystac.Item:
         mlm_input=[],
         mlm_output=[
             {
+                "name": "segmentation",
+                "tasks": ["semantic-segmentation"],
+                "result": {
+                    "shape": [-1, 2, 256, 256],
+                    "dim_order": ["batch", "class", "height", "width"],
+                    "data_type": "float32",
+                },
                 "classification:classes": [{"name": "background"}, {"name": "building"}],
             }
         ],
@@ -98,6 +105,12 @@ def _base_model() -> pystac.Item:
         fair_metrics_spec=[{"name": "accuracy", "description": "Accuracy", "higher_is_better": True}],
         providers=[{"name": "HOTOSM", "roles": ["producer"]}],
     )
+    item.properties["fair:hyperparameters_spec"] = [
+        {"key": "epochs", "type": "int", "default": 10, "description": "Training epochs"},
+        {"key": "batch_size", "type": "int", "default": 2, "description": "Batch size"},
+        {"key": "confidence_threshold", "type": "float", "default": 0.5, "description": "Confidence threshold"},
+    ]
+    return item
 
 
 def _dataset_item(tmp_path: Path) -> pystac.Item:
@@ -536,6 +549,7 @@ def test_publish_promoted_model_covers_missing_onnx_and_local_store(
     )
     assert item.id == "mv-2"
 
+    monkeypatch.setattr("fair.zenml.promotion.validate_item", lambda *_args, **_kwargs: [])
     monkeypatch.setattr("fair.zenml.promotion.validate_model_asset_urls", lambda *_args, **_kwargs: ["bad"])
     monkeypatch.setattr(
         "fair.zenml.promotion._upload_model_artifacts",
