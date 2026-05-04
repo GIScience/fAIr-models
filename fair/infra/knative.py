@@ -391,12 +391,12 @@ def _knative_serving_installed() -> bool:
     from kubernetes.client.exceptions import ApiException
 
     try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
-    try:
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
         groups = client.ApisApi().get_api_versions().groups
-    except ApiException:
+    except (config.ConfigException, ApiException):
         return False
     return any(g.name == KNATIVE_GROUP for g in groups)
 

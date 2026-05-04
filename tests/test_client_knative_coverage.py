@@ -667,6 +667,7 @@ def test_knative_helpers_and_gateway_management(monkeypatch) -> None:
     gateway_calls: list[str] = []
     monkeypatch.setattr(knative_module, "_upsert_knative_service", lambda *args: upserted.append("service"))
     monkeypatch.setattr(knative_module, "_ensure_predict_gateway", lambda *args: gateway_calls.append("gateway"))
+    monkeypatch.setattr(knative_module, "_knative_serving_installed", lambda: True)
 
     monkeypatch.delenv("FAIR_LABEL_DOMAIN", raising=False)
     knative_module.ensure_knative_service(_build_base_model_item())
@@ -675,6 +676,10 @@ def test_knative_helpers_and_gateway_management(monkeypatch) -> None:
     assert upserted == ["service", "service"]
     assert gateway_calls == ["gateway"]
 
+    monkeypatch.setattr(knative_module, "_knative_serving_installed", lambda: False)
+    knative_module.ensure_knative_service(_build_base_model_item())
+    assert upserted == ["service", "service"]
+
     delete_api = DummyCustomObjectsApi()
     monkeypatch.setattr(knative_module, "_custom_objects_api", lambda: delete_api)
     knative_module.delete_knative_service("missing-service")
@@ -682,3 +687,32 @@ def test_knative_helpers_and_gateway_management(monkeypatch) -> None:
     assert delete_api.deleted == ["good-service"]
     with pytest.raises(DummyApiException):
         knative_module.delete_knative_service("broken-service")
+
+
+def test_knative_serving_installed_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kubernetes import client, config
+
+    monkeypatch.setattr(config, "load_incluster_config", lambda: None)
+
+    monkeypatch.setattr(
+        client,
+        "ApisApi",
+        lambda: SimpleNamespace(
+            get_api_versions=lambda: SimpleNamespace(groups=[SimpleNamespace(name=knative_module.KNATIVE_GROUP)])
+        ),
+    )
+    assert knative_module._knative_serving_installed() is True
+
+    monkeypatch.setattr(
+        client,
+        "ApisApi",
+        lambda: SimpleNamespace(get_api_versions=lambda: SimpleNamespace(groups=[SimpleNamespace(name="other.io")])),
+    )
+    assert knative_module._knative_serving_installed() is False
+
+    def _raise_config(*_: Any, **__: Any) -> None:
+        raise config.ConfigException("no kubeconfig")
+
+    monkeypatch.setattr(config, "load_incluster_config", _raise_config)
+    monkeypatch.setattr(config, "load_kube_config", _raise_config)
+    assert knative_module._knative_serving_installed() is False
