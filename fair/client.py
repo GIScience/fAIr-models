@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CATALOG_PATH = "stac_catalog/catalog.json"
 
+_LABEL_FILE_SUFFIXES = (".json", ".geojson", ".csv")
+
+
+def _labels_dir_from_href(labels_href: str) -> str:
+    if labels_href.lower().endswith(_LABEL_FILE_SUFFIXES):
+        return str(UPath(labels_href).parent)
+    return labels_href
+
 
 class FairClientError(Exception):
     pass
@@ -247,10 +255,7 @@ class FairClient:
 
         Path("artifacts").mkdir(exist_ok=True)
         archive_path = Path("artifacts") / f"{title}-v{version}.zip"
-        # UPath, not Path: `Path("s3://...").is_file()` always returns False
-        # because pathlib doesn't recognise the scheme. UPath dispatches to fsspec.
-        labels_upath = UPath(labels_href)
-        labels_dir_str = str(labels_upath.parent) if labels_upath.is_file() else labels_href
+        labels_dir_str = _labels_dir_from_href(labels_href)
         create_dataset_archive(chips_dir=chips_href, labels_dir=labels_dir_str, output_path=str(archive_path))
 
         dataset_item = build_dataset_item(
@@ -307,9 +312,7 @@ class FairClient:
 
         Path("artifacts").mkdir(exist_ok=True)
         archive_path = Path("artifacts") / f"{title}-v{version}.zip"
-        # because pathlib doesn't recognise the s3 scheme. UPath dispatches to fsspec.
-        labels_upath = UPath(labels_href)
-        labels_dir_str = str(labels_upath.parent) if labels_upath.is_file() else labels_href
+        labels_dir_str = _labels_dir_from_href(labels_href)
         create_dataset_archive(chips_dir=chips_href, labels_dir=labels_dir_str, output_path=str(archive_path))
 
         fields = dataclasses.asdict(params)
@@ -412,7 +415,7 @@ class FairClient:
         pipeline_run_id: str | None = None,
         paths: type[LocalModelStoragePaths] | None = None,
     ) -> str:
-        """Promote a finetuned model version to STAC's local-models collection."""
+        """Promote a finetuned model version to STAC's local-models collection.s"""
         effective_user_id = user_id or self.user_id
         model_name = finetuned_model_id
 
