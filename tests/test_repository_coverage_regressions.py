@@ -458,7 +458,9 @@ def test_upload_model_artifacts_uses_uri_not_load(tmp_path: Path) -> None:
     onnx_art.uri = str(onnx_src)
     onnx_art.load.side_effect = AssertionError("must NOT call .load()")
 
-    checkpoint_path, onnx_path = _upload_model_artifacts(weights_art, onnx_art, "demo", None)
+    from fair.utils.storage import LocalModelStoragePaths
+
+    checkpoint_path, onnx_path = _upload_model_artifacts(weights_art, onnx_art, "demo", None, LocalModelStoragePaths)
     assert Path(checkpoint_path).read_bytes() == b"weights-bytes"
     assert Path(onnx_path).read_bytes() == b"onnx-bytes"
 
@@ -476,11 +478,17 @@ def test_upload_training_metrics_local_and_remote(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("upath.UPath", DummyRemotePath)
     monkeypatch.setattr("fair.zenml.promotion.s3_uri_to_http_url", lambda path: f"https://cdn.example/{path[5:]}")
 
-    local_metrics = _upload_training_metrics({"train_loss": [1.0], "val_loss": [2.0]}, "demo", None)
+    from fair.utils.storage import LocalModelStoragePaths
+
+    local_metrics = _upload_training_metrics(
+        {"train_loss": [1.0], "val_loss": [2.0]}, "demo", None, LocalModelStoragePaths
+    )
     assert local_metrics is not None and Path(local_metrics).exists()
     assert json.loads(Path(local_metrics).read_text())["epochs"] == [1]
 
-    remote_metrics = _upload_training_metrics({"train_loss": [1.0], "val_loss": [2.0]}, "demo", "s3://bucket")
+    remote_metrics = _upload_training_metrics(
+        {"train_loss": [1.0], "val_loss": [2.0]}, "demo", "s3://bucket", LocalModelStoragePaths
+    )
     assert remote_metrics == "https://cdn.example/bucket/local-models/demo/training-metrics/demo.json"
 
 
