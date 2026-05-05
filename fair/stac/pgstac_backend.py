@@ -87,6 +87,16 @@ class PgStacBackend:
         features = resp.json().get("features", [])
         return [pystac.Item.from_dict(f) for f in features]
 
+    def patch_item(self, collection_id: str, item_id: str, patch: dict) -> pystac.Item:
+        # pgstac's loader has no native PATCH; do a get + merge + upsert
+        item = self.get_item(collection_id, item_id)
+        for key, value in patch.items():
+            if key == "properties" and isinstance(value, dict):
+                item.properties.update(value)
+            else:
+                setattr(item, key, value)
+        return self.publish_item(collection_id, item)
+
     def deprecate_item(self, collection_id: str, item_id: str) -> pystac.Item:
         item = self.get_item(collection_id, item_id)
         item.properties["deprecated"] = True

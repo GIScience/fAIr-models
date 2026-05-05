@@ -267,9 +267,7 @@ def test_mirror_asset_to_artifact_store_updates_asset_href(monkeypatch) -> None:
         def write_bytes(self, data: bytes) -> None:
             self.storage[self.path] = data
 
-    import upath
-
-    monkeypatch.setattr(upath, "UPath", DummyUPath)
+    monkeypatch.setattr(client_module, "UPath", DummyUPath)
     monkeypatch.setattr(
         client_module,
         "s3_uri_to_http_url",

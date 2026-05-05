@@ -244,3 +244,4 @@ mlflow.db
 # mkdocs build output
 site/
 docs/schemas/
+runs
