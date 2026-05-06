@@ -1,18 +1,18 @@
+# Read-only kubeconfig handout: cluster-wide view + the single write verb
+# (pods/portforward in `fair`) required to tunnel postgres for DBeaver.
+# Mint a kubeconfig for it with `just kubeconfig`.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: db-portforward
+  name: viewer
   namespace: fair
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: db-portforward
+  name: viewer-portforward
   namespace: fair
 rules:
-  - apiGroups: [""]
-    resources: ["services", "pods"]
-    verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["pods/portforward"]
     verbs: ["create"]
@@ -20,36 +20,35 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: db-portforward
+  name: viewer-portforward
   namespace: fair
 subjects:
   - kind: ServiceAccount
-    name: db-portforward
+    name: viewer
     namespace: fair
 roleRef:
   kind: Role
-  name: db-portforward
+  name: viewer-portforward
   apiGroup: rbac.authorization.k8s.io
 ---
-# Cluster-wide read on every resource the built-in `view`
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: db-portforward-view
+  name: viewer
 subjects:
   - kind: ServiceAccount
-    name: db-portforward
+    name: viewer
     namespace: fair
 roleRef:
   kind: ClusterRole
   name: view
   apiGroup: rbac.authorization.k8s.io
 ---
-# `view` is namespace-scoped
+# Built-in `view` is namespace-scoped; cluster-scoped resources need their own grant.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: db-portforward-cluster-read
+  name: viewer-cluster-read
 rules:
   - apiGroups: [""]
     resources: ["nodes", "namespaces", "persistentvolumes"]
@@ -70,12 +69,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: db-portforward-cluster-read
+  name: viewer-cluster-read
 subjects:
   - kind: ServiceAccount
-    name: db-portforward
+    name: viewer
     namespace: fair
 roleRef:
   kind: ClusterRole
-  name: db-portforward-cluster-read
+  name: viewer-cluster-read
   apiGroup: rbac.authorization.k8s.io

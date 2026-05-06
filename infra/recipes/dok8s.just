@@ -110,15 +110,15 @@ _bootstrap-fair-db:
     kubectl apply -f manifests/fair-db-bootstrap.yaml
     kubectl wait --for=condition=complete -n {{ ns }} job/fair-db-bootstrap --timeout=120s
 
-[doc('Mint a scoped kubeconfig for port-forwarding postgres (DBeaver et al.). Usage: just db-kubeconfig [OUT] [DURATION]')]
-db-kubeconfig out="db.kubeconfig" duration="720h":
+[doc('Mint a scoped kubeconfig: cluster-wide read + postgres port-forward in fair. Usage: just kubeconfig [OUT] [DURATION]')]
+kubeconfig out="viewer.kubeconfig" duration="720h":
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl apply -f manifests/db-portforward-rbac.yaml >/dev/null
+    kubectl apply -f manifests/viewer-rbac.yaml >/dev/null
     CLUSTER_NAME="$(kubectl config view --minify -o jsonpath='{.clusters[0].name}')"
     SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
     CA_DATA="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
-    TOKEN="$(kubectl create token db-portforward -n {{ ns }} --duration={{ duration }})"
+    TOKEN="$(kubectl create token viewer -n {{ ns }} --duration={{ duration }})"
     cat > "{{ out }}" <<EOF
     apiVersion: v1
     kind: Config
@@ -128,19 +128,16 @@ db-kubeconfig out="db.kubeconfig" duration="720h":
           server: ${SERVER}
           certificate-authority-data: ${CA_DATA}
     users:
-      - name: db-portforward
+      - name: viewer
         user:
           token: ${TOKEN}
     contexts:
-      - name: fair-db
+      - name: fair
         context:
           cluster: ${CLUSTER_NAME}
           namespace: {{ ns }}
-          user: db-portforward
-    current-context: fair-db
+          user: viewer
+    current-context: fair
     EOF
     chmod 600 "{{ out }}"
     echo "Wrote {{ out }} (valid {{ duration }})"
-    echo "Recipient runs:"
-    echo "  KUBECONFIG=./{{ out }} kubectl port-forward -n {{ ns }} svc/postgres 5432:5432"
-    echo "  then DBeaver -> localhost:5432  postgres/postgres"
