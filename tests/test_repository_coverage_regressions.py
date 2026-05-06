@@ -253,14 +253,36 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
     class DummyRemotePath:
         storage: ClassVar[dict[str, bytes]] = {}
 
-        def __init__(self, path: str) -> None:
-            self.path = path
+        def __init__(self, path: object, **_kwargs: object) -> None:
+            self.path = str(path)
+            self._local = Path(self.path) if "://" not in self.path else None
 
-        def __truediv__(self, other: Path) -> DummyRemotePath:
-            return DummyRemotePath(f"{self.path.rstrip('/')}/{other.as_posix()}")
+        def is_dir(self) -> bool:
+            return self._local.is_dir() if self._local else False
+
+        def is_file(self) -> bool:
+            return self._local.is_file() if self._local else self.path in self.storage
+
+        def rglob(self, pattern: str) -> list[DummyRemotePath]:
+            if not self._local:
+                return []
+            return [DummyRemotePath(str(p)) for p in self._local.rglob(pattern)]
+
+        def relative_to(self, other: DummyRemotePath) -> Path:
+            return self._local.relative_to(other._local)  # type: ignore[union-attr]
+
+        def read_bytes(self) -> bytes:
+            return self._local.read_bytes() if self._local else self.storage[self.path]
 
         def write_bytes(self, data: bytes) -> None:
             self.storage[self.path] = data
+
+        def __truediv__(self, other: object) -> DummyRemotePath:
+            suffix = other.as_posix() if isinstance(other, Path) else str(other)
+            return DummyRemotePath(f"{self.path.rstrip('/')}/{suffix}")
+
+        def __lt__(self, other: DummyRemotePath) -> bool:
+            return self.path < other.path
 
     monkeypatch.setattr("fair.utils.data.UPath", DummyRemotePath)
     upload_local_directory(source_dir, "s3://bucket/prefix")

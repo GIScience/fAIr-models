@@ -13,7 +13,7 @@ from fair.stac.builders import build_local_model_item
 from fair.stac.constants import BASE_MODELS_COLLECTION, DATASETS_COLLECTION, LOCAL_MODELS_COLLECTION
 from fair.stac.validators import validate_item, validate_model_asset_urls
 from fair.stac.versioning import deprecate_and_link_successor, find_previous_active_item
-from fair.utils.data import s3_uri_to_http_url, upload_storage_options
+from fair.utils.data import mirror, s3_uri_to_http_url, upload_storage_options
 from fair.utils.storage import LocalModelStoragePaths
 from fair.zenml.materializers import ONNX_FILENAME as _FAIR_ONNX_FILENAME
 from fair.zenml.metrics import read_fair_metrics, read_loss_history, read_training_wall_time
@@ -52,11 +52,10 @@ def _copy_artifact_to_prefix(
     from upath import UPath
 
     src = UPath(source_uri)
-    dst = UPath(dest_dir, **upload_storage_options()) / dest_filename
+    dst = UPath(dest_dir) / dest_filename
 
     if src.is_file():
-        log.info("Copy %s -> %s", src, dst)
-        dst.write_bytes(src.read_bytes())
+        mirror(source_uri, str(dst))
         return str(dst)
 
     if not src.is_dir():
@@ -70,9 +69,7 @@ def _copy_artifact_to_prefix(
             f"found {len(matches)} (all files: {all_files})"
         )
 
-    chosen = matches[0]
-    log.info("Copy %s -> %s", chosen, dst)
-    dst.write_bytes(chosen.read_bytes())
+    mirror(str(matches[0]), str(dst))
     return str(dst)
 
 

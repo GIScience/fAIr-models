@@ -254,12 +254,18 @@ def test_mirror_asset_to_artifact_store_updates_asset_href(monkeypatch) -> None:
             "https://example.com/checkpoint.pt": b"weights",
         }
 
-        def __init__(self, path: str) -> None:
+        def __init__(self, path: str, **_kwargs: object) -> None:
             self.path = path
 
         @property
         def name(self) -> str:
             return Path(self.path).name
+
+        def is_file(self) -> bool:
+            return self.path in self.storage
+
+        def is_dir(self) -> bool:
+            return False
 
         def read_bytes(self) -> bytes:
             return self.storage[self.path]
@@ -268,6 +274,7 @@ def test_mirror_asset_to_artifact_store_updates_asset_href(monkeypatch) -> None:
             self.storage[self.path] = data
 
     monkeypatch.setattr(client_module, "UPath", DummyUPath)
+    monkeypatch.setattr("fair.utils.data.UPath", DummyUPath)
     monkeypatch.setattr(
         client_module,
         "s3_uri_to_http_url",

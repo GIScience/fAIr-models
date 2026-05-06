@@ -191,6 +191,37 @@ def upload_storage_options() -> dict:
     return {"s3_additional_kwargs": {"ACL": acl}}
 
 
+def mirror(src: str | Path, dest: str | Path) -> None:
+    """Copy a file or directory tree from src to dest.
+
+    src and dest may each be local paths or remote URIs (s3://, https://, etc).
+    If src is a directory, dest is treated as a directory prefix and the tree
+    is copied recursively. If src is a file, dest is treated as the target file path.
+
+    Upload options from upload_storage_options() (e.g. ACL) are applied at the
+    destination. Remote-to-remote copies stream through the local process.
+    """
+    src_path = UPath(str(src))
+    dest_str = str(dest)
+
+    if src_path.is_dir():
+        dest_path = UPath(dest_str, **upload_storage_options())
+        for f in sorted(src_path.rglob("*")):
+            if f.is_file():
+                target = dest_path / f.relative_to(src_path)
+                target.write_bytes(f.read_bytes())
+                logger.info("Mirrored %s -> %s", f, target)
+        return
+
+    if src_path.is_file():
+        dest_path = UPath(dest_str, **upload_storage_options())
+        dest_path.write_bytes(src_path.read_bytes())
+        logger.info("Mirrored %s -> %s", src_path, dest_path)
+        return
+
+    raise FileNotFoundError(f"mirror source not found: {src}")
+
+
 def upload_item_assets(
     item: pystac.Item,
     data_prefix: str,
@@ -204,7 +235,6 @@ def upload_item_assets(
 
     Returns the item with rewritten hrefs.
     """
-    storage_options = upload_storage_options()
     for key, asset in item.assets.items():
         if _is_remote(asset.href):
             continue
@@ -213,12 +243,11 @@ def upload_item_assets(
         local = Path(asset.href)
 
         if local.is_dir():
-            upload_local_directory(local, remote_base)
+            mirror(local, remote_base)
             asset.href = s3_uri_to_http_url(remote_base)
         elif local.is_file():
             remote_path = f"{remote_base}/{local.name}"
-            UPath(remote_path, **storage_options).write_bytes(local.read_bytes())
-            logger.info("Uploaded %s -> %s", local, remote_path)
+            mirror(local, remote_path)
             asset.href = s3_uri_to_http_url(remote_path)
         else:
             logger.warning("Asset '%s' href not found locally: %s", key, asset.href)
@@ -227,9 +256,5 @@ def upload_item_assets(
 
 
 def upload_local_directory(local_dir: Path, remote_prefix: str) -> None:
-    storage_options = upload_storage_options()
-    for f in sorted(local_dir.rglob("*")):
-        if f.is_file():
-            dest = UPath(remote_prefix, **storage_options) / f.relative_to(local_dir)
-            dest.write_bytes(f.read_bytes())
-            logger.info("Uploaded %s -> %s", f, dest)
+    """Recursively upload a local directory to a remote prefix. Thin wrapper over mirror()."""
+    mirror(local_dir, remote_prefix)
