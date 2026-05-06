@@ -175,6 +175,19 @@ def create_dataset_archive(
     return str(out)
 
 
+def _upload_storage_options() -> dict:
+    """fsspec/s3fs storage options applied to upload writes.
+
+    FAIR_S3_UPLOAD_ACL: canned S3 ACL (e.g. "public-read"). When set, passed
+    via s3_additional_kwargs so every put/open call on the filesystem
+    inherits it. Unset means no ACL header is sent (bucket default applies).
+    """
+    acl = os.environ.get("FAIR_S3_UPLOAD_ACL", "").strip()
+    if not acl:
+        return {}
+    return {"s3_additional_kwargs": {"ACL": acl}}
+
+
 def upload_item_assets(
     item: pystac.Item,
     data_prefix: str,
@@ -188,6 +201,7 @@ def upload_item_assets(
 
     Returns the item with rewritten hrefs.
     """
+    storage_options = _upload_storage_options()
     for key, asset in item.assets.items():
         if _is_remote(asset.href):
             continue
@@ -200,7 +214,7 @@ def upload_item_assets(
             asset.href = s3_uri_to_http_url(remote_base)
         elif local.is_file():
             remote_path = f"{remote_base}/{local.name}"
-            UPath(remote_path).write_bytes(local.read_bytes())
+            UPath(remote_path, **storage_options).write_bytes(local.read_bytes())
             logger.info("Uploaded %s -> %s", local, remote_path)
             asset.href = s3_uri_to_http_url(remote_path)
         else:
@@ -210,8 +224,9 @@ def upload_item_assets(
 
 
 def upload_local_directory(local_dir: Path, remote_prefix: str) -> None:
+    storage_options = _upload_storage_options()
     for f in sorted(local_dir.rglob("*")):
         if f.is_file():
-            dest = UPath(remote_prefix) / f.relative_to(local_dir)
+            dest = UPath(remote_prefix, **storage_options) / f.relative_to(local_dir)
             dest.write_bytes(f.read_bytes())
             logger.info("Uploaded %s -> %s", f, dest)

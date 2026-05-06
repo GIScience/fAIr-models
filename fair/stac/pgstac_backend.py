@@ -55,7 +55,7 @@ class PgStacBackend:
         item.properties["updated"] = datetime.now(UTC).isoformat()
         ensure_version_links(item, self.item_href(collection_id, item.id))
         normalize_version_link_hrefs(item, self.item_href, collection_id)
-        item_dict = item.to_dict()
+        item_dict = item.to_dict(transform_hrefs=False)
         item_dict["collection"] = collection_id
         with self._get_db() as db:
             loader = Loader(db)

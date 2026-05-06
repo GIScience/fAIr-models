@@ -10,6 +10,7 @@ import pytest
 
 from fair.utils.data import (
     _is_remote,
+    _upload_storage_options,
     create_dataset_archive,
     list_files,
     resolve_directory,
@@ -229,3 +230,40 @@ class TestUploadItemAssets:
         with patch("fair.utils.data.UPath"):
             result = upload_item_assets(item, "s3://bucket/data", "datasets")
         assert result is item
+
+
+class TestUploadStorageOptions:
+    def test_unset_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FAIR_S3_UPLOAD_ACL", raising=False)
+        assert _upload_storage_options() == {}
+
+    def test_blank_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FAIR_S3_UPLOAD_ACL", "   ")
+        assert _upload_storage_options() == {}
+
+    def test_set_returns_acl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FAIR_S3_UPLOAD_ACL", "public-read")
+        assert _upload_storage_options() == {"s3_additional_kwargs": {"ACL": "public-read"}}
+
+    @patch("fair.utils.data.UPath")
+    def test_upload_item_assets_passes_acl_kwarg(
+        self,
+        mock_upath_cls: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("FAIR_S3_UPLOAD_ACL", "public-read")
+        f = tmp_path / "thing.bin"
+        f.write_bytes(b"x")
+        item = pystac.Item(
+            id="i",
+            geometry={"type": "Point", "coordinates": [0, 0]},
+            bbox=[0, 0, 0, 0],
+            datetime=_NOW,
+            properties={},
+        )
+        item.add_asset("a", pystac.Asset(href=str(f), roles=["data"]))
+
+        upload_item_assets(item, "s3://bucket/data", "datasets")
+
+        assert mock_upath_cls.call_args.kwargs == {"s3_additional_kwargs": {"ACL": "public-read"}}
