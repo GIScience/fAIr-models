@@ -175,12 +175,15 @@ def create_dataset_archive(
     return str(out)
 
 
-def _upload_storage_options() -> dict:
+def upload_storage_options() -> dict:
     """fsspec/s3fs storage options applied to upload writes.
 
     FAIR_S3_UPLOAD_ACL: canned S3 ACL (e.g. "public-read"). When set, passed
     via s3_additional_kwargs so every put/open call on the filesystem
     inherits it. Unset means no ACL header is sent (bucket default applies).
+
+    Pass to UPath at construction time: UPath(uri, **upload_storage_options()).
+    Children created via `/` inherit storage_options.
     """
     acl = os.environ.get("FAIR_S3_UPLOAD_ACL", "").strip()
     if not acl:
@@ -201,7 +204,7 @@ def upload_item_assets(
 
     Returns the item with rewritten hrefs.
     """
-    storage_options = _upload_storage_options()
+    storage_options = upload_storage_options()
     for key, asset in item.assets.items():
         if _is_remote(asset.href):
             continue
@@ -224,7 +227,7 @@ def upload_item_assets(
 
 
 def upload_local_directory(local_dir: Path, remote_prefix: str) -> None:
-    storage_options = _upload_storage_options()
+    storage_options = upload_storage_options()
     for f in sorted(local_dir.rglob("*")):
         if f.is_file():
             dest = UPath(remote_prefix, **storage_options) / f.relative_to(local_dir)

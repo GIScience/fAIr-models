@@ -10,12 +10,12 @@ import pytest
 
 from fair.utils.data import (
     _is_remote,
-    _upload_storage_options,
     create_dataset_archive,
     list_files,
     resolve_directory,
     resolve_path,
     upload_item_assets,
+    upload_storage_options,
 )
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -235,15 +235,15 @@ class TestUploadItemAssets:
 class TestUploadStorageOptions:
     def test_unset_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("FAIR_S3_UPLOAD_ACL", raising=False)
-        assert _upload_storage_options() == {}
+        assert upload_storage_options() == {}
 
     def test_blank_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FAIR_S3_UPLOAD_ACL", "   ")
-        assert _upload_storage_options() == {}
+        assert upload_storage_options() == {}
 
     def test_set_returns_acl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FAIR_S3_UPLOAD_ACL", "public-read")
-        assert _upload_storage_options() == {"s3_additional_kwargs": {"ACL": "public-read"}}
+        assert upload_storage_options() == {"s3_additional_kwargs": {"ACL": "public-read"}}
 
     @patch("fair.utils.data.UPath")
     def test_upload_item_assets_passes_acl_kwarg(

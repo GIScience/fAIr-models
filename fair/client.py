@@ -32,6 +32,7 @@ from fair.utils.data import (
     s3_uri_to_http_url,
     upload_item_assets,
     upload_local_directory,
+    upload_storage_options,
 )
 from fair.utils.storage import DatasetStoragePaths, LocalModelStoragePaths
 from fair.zenml.config import generate_inference_config, generate_training_config
@@ -170,7 +171,7 @@ class FairClient:
         remote_path = f"{prefix}/{collection_id}/{item.id}/{asset_key}/{filename}"
 
         logger.info("Mirroring %s -> %s", source_url, remote_path)
-        UPath(remote_path).write_bytes(UPath(source_url).read_bytes())
+        UPath(remote_path, **upload_storage_options()).write_bytes(UPath(source_url).read_bytes())
         asset.href = s3_uri_to_http_url(remote_path)
 
     def setup(self) -> None:
