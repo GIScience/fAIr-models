@@ -249,20 +249,8 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
     (source_dir / "nested").mkdir()
     (source_dir / "nested" / "tile.tif").write_bytes(b"tile")
 
-    class DummyFS:
-        def put(self, src: str, dest: str, recursive: bool = False) -> None:
-            src_p = Path(src)
-            base = dest.rstrip("/")
-            if src_p.is_dir() and recursive:
-                for f in src_p.rglob("*"):
-                    if f.is_file():
-                        DummyRemotePath.storage[f"{base}/{f.relative_to(src_p)}"] = f.read_bytes()
-            elif src_p.is_file():
-                DummyRemotePath.storage[base] = src_p.read_bytes()
-
     class DummyRemotePath:
         storage: ClassVar[dict[str, bytes]] = {}
-        fs: ClassVar[DummyFS] = DummyFS()
 
         def __init__(self, path: object, **_kwargs: object) -> None:
             self.path = str(path)
@@ -274,6 +262,14 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
         def is_file(self) -> bool:
             return self._local.is_file() if self._local else self.path in self.storage
 
+        def rglob(self, pattern: str) -> list[DummyRemotePath]:
+            if not self._local:
+                return []
+            return [DummyRemotePath(str(p)) for p in self._local.rglob(pattern)]
+
+        def relative_to(self, other: DummyRemotePath) -> Path:
+            return self._local.relative_to(other._local)  # type: ignore[union-attr]
+
         def read_bytes(self) -> bytes:
             return self._local.read_bytes() if self._local else self.storage[self.path]
 
@@ -284,8 +280,8 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
             suffix = other.as_posix() if isinstance(other, Path) else str(other)
             return DummyRemotePath(f"{self.path.rstrip('/')}/{suffix}")
 
-        def __str__(self) -> str:
-            return self.path
+        def __lt__(self, other: DummyRemotePath) -> bool:
+            return self.path < other.path
 
     monkeypatch.setattr("fair.utils.data.UPath", DummyRemotePath)
     upload_local_directory(source_dir, "s3://bucket/prefix")
