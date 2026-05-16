@@ -1,36 +1,68 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-mode_file := ".fair-mode"
-mode := `cat .fair-mode 2>/dev/null || echo k8s`
+compose := "docker compose -f infra/compose/docker-compose.yml"
 
-import 'recipes/local.just'
-import 'recipes/k8s.just'
-
-[doc('Show current mode and available recipes')]
-default:
-    @echo "mode: {{ mode }}"
-    @echo ""
-    @just --list --unsorted
-
-[doc('Switch to local mode')]
-local:
-    @echo local > {{ mode_file }} && echo "mode: local"
-
-[doc('Switch to k8s mode (default)')]
-k8s:
-    @echo k8s > {{ mode_file }} && echo "mode: k8s"
-
-[doc('One-shot: install deps, build cli image, bring up the full stack')]
+[doc('Install deps, bring up the stack, register the ZenML stack')]
 setup:
-    @just _setup-{{ mode }}
+    uv sync --group dev --group docs --extra k8s
+    uv run pre-commit install --hook-type commit-msg --hook-type pre-commit
+    {{ compose }} up -d --wait
+    uv run zenml init >/dev/null
+    infra/compose/register-stack.sh
+    @echo
+    @echo "Stack up. ZenML :8080  MLflow :5000  STAC :8082  MinIO :9001"
+    @echo "Next: 'just build' to build model images, then 'just example'."
 
-[doc('Full teardown: cluster, port-forwards, zenml state, artifacts')]
-clean:
-    @just _clean-{{ mode }}
+[doc('Build model image(s). No arg = all; arg = one (e.g. `just build unet_segmentation`)')]
+build model="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dirs=$([ -n "{{ model }}" ] && echo "models/{{ model }}" || echo models/*)
+    for d in $dirs; do
+        [[ -f "$d/Dockerfile" && -f "$d/stac-item.json" ]] || continue
+        name=$(basename "$d")
+        href=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['assets']['mlm:training']['href'])" "$d/stac-item.json")
+        echo "==> building $name -> $href"
+        docker build -f "$d/Dockerfile" --target runtime -t "$href" .
+    done
 
-[doc('Run all 3 example pipelines (segmentation, classification, detection)')]
-example:
-    @just _example-{{ mode }}
+[doc('Run a model inference container locally (e.g. `just serve unet_segmentation`)')]
+serve model:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    href=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['assets']['mlm:inference']['href'])" "models/{{ model }}/stac-item.json")
+    docker build -f "models/{{ model }}/Dockerfile" --target inference -t "$href" .
+    echo "Serving on http://localhost:8080 (Ctrl-C to stop)"
+    docker run --rm -it --network host "$href"
+
+[doc('Run example pipeline(s). No arg = all; arg = one (e.g. `just example segmentation`)')]
+example name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exs=$([ -n "{{ name }}" ] && echo "{{ name }}" || echo "segmentation classification detection")
+    for ex in $exs; do
+        AWS_ENDPOINT_URL=http://localhost:9000 \
+        AWS_ACCESS_KEY_ID=minioadmin \
+        AWS_SECRET_ACCESS_KEY=minioadmin \
+        FAIR_STAC_API_URL=http://localhost:8082 \
+        FAIR_DSN=postgresql://postgres:postgres@localhost:5432/fair_models \
+        FAIR_UPLOAD_ARTIFACTS=true \
+            uv run python "examples/$ex/run.py"
+    done
+
+[doc('Stop the stack (containers stopped, volumes and ZenML state preserved)')]
+down:
+    {{ compose }} stop
+
+[doc('Bring the stack back up after `just down`')]
+up:
+    {{ compose }} start
+
+[doc('Destroy the stack: containers + volumes + local ZenML state + artifacts')]
+tear:
+    -{{ compose }} down -v
+    -uv run zenml clean -y
+    rm -rf .zen artifacts dist *.egg-info
 
 [doc('Lint and format')]
 lint:
