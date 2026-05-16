@@ -34,6 +34,12 @@ components:
       secret: minioadmin
       client_kwargs:
         endpoint_url: "http://minio.fair.svc:9000"
+  container_registry:
+    name: ghcr_k8s
+    flavor: default
+    type: container_registry
+    configuration:
+      uri: ghcr.io/hotosm
   experiment_tracker:
     name: mlflow_k8s
     flavor: mlflow
