@@ -129,16 +129,11 @@ def resolve_directory(href: str, pattern: str = "*", local_dir: Path | None = No
         raise FileNotFoundError(msg)
 
     cache = local_dir or _DEFAULT_CACHE
-    dest_dir: Path | None = None
-
-    for uri in uris:
-        local = resolve_path(uri, local_dir=cache)
-        if dest_dir is None:
-            dest_dir = local.parent
-
-    if dest_dir is None:
-        msg = f"resolve_directory downloaded files but dest_dir is still None for {href}"
-        raise ValueError(msg)
+    rel = urlparse(uris[0]).path.lstrip("/")
+    dest_dir = (cache / rel).parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    # fsspec bulk get runs concurrent S3 fetches via aiobotocore.
+    UPath(uris[0]).fs.get(uris, str(dest_dir) + "/")
     return dest_dir
 
 
@@ -206,11 +201,9 @@ def mirror(src: str | Path, dest: str | Path) -> None:
 
     if src_path.is_dir():
         dest_path = UPath(dest_str, **upload_storage_options())
-        for f in sorted(src_path.rglob("*")):
-            if f.is_file():
-                target = dest_path / f.relative_to(src_path)
-                target.write_bytes(f.read_bytes())
-                logger.info("Mirrored %s -> %s", f, target)
+        # fsspec bulk put runs concurrent S3 uploads via aiobotocore.
+        dest_path.fs.put(str(src_path), str(dest_path), recursive=True)
+        logger.info("Mirrored %s -> %s", src_path, dest_path)
         return
 
     if src_path.is_file():
