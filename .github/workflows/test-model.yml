@@ -78,9 +78,23 @@ jobs:
           uv run zenml init
           infra/scripts/register-k8s-stack.sh
 
-      - name: Run example + smoke-test
+      - name: Run example
+        env:
+          MODEL: ${{ steps.model.outputs.name }}
+        run: just example "$MODEL"
+
+      - name: Smoke-test + save predictions
         env:
           MODEL: ${{ steps.model.outputs.name }}
         run: |
-          just example "$MODEL"
-          just test-serve "$MODEL"
+          mkdir -p ci-artifacts
+          uv run python scripts/test_serve.py "$MODEL" \
+            --output "ci-artifacts/$MODEL-predictions.geojson"
+
+      - name: Upload smoke predictions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-predictions-${{ steps.model.outputs.name }}
+          path: ci-artifacts/${{ steps.model.outputs.name }}-predictions.geojson
+          if-no-files-found: ignore

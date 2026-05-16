@@ -56,7 +56,14 @@ def post_predict(payload: dict) -> tuple[int, str]:
 
 
 def main() -> int:
-    model = sys.argv[1]
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("model")
+    parser.add_argument("--output", default="", help="Path to write the prediction GeoJSON (optional)")
+    args = parser.parse_args()
+
+    model = args.model
     base_id = model.replace("_", "-")
     stac_item = Path(f"models/{model}/stac-item.json")
     image = json.loads(stac_item.read_text())["assets"]["mlm:inference"]["href"]
@@ -102,6 +109,8 @@ def main() -> int:
         code, body = post_predict(payload)
         print(f"HTTP {code}")
         print(body[:800])
+        if args.output and code == 200:
+            Path(args.output).write_text(body)
         return 0 if code == 200 else 1
     finally:
         subprocess.run(["docker", "kill", cid], check=False, capture_output=True)
