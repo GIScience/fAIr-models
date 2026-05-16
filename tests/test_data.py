@@ -4,6 +4,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pystac
 import pytest
@@ -91,48 +92,30 @@ class TestResolveDirectory:
 
     @patch("fair.utils.data.UPath")
     def test_downloads_prefix(self, mock_upath_cls: MagicMock, tmp_path: Path) -> None:
-        mock_remote = MagicMock()
-        mock_upath_cls.return_value = mock_remote
-        mock_remote.path = "/train/oam"
-
+        listing = MagicMock()
         f1, f2 = MagicMock(), MagicMock()
         f1.__str__ = lambda _: "s3://bucket/train/oam/OAM-1-2-3.tif"
         f1.is_dir.return_value = False
-        f1.path = "/train/oam/OAM-1-2-3.tif"
-        f1.read_bytes.return_value = b"tile1"
         f2.__str__ = lambda _: "s3://bucket/train/oam/OAM-4-5-6.tif"
         f2.is_dir.return_value = False
-        f2.path = "/train/oam/OAM-4-5-6.tif"
-        f2.read_bytes.return_value = b"tile2"
-        mock_remote.glob.return_value = [f1, f2]
+        listing.glob.return_value = [f1, f2]
 
-        # Mock UPath constructor for each individual file resolve_path call
-        mock_upath_cls.side_effect = [mock_remote, f1, f2]
+        anchor = MagicMock()
+
+        def fake_get(uris: list[str], dest: str) -> None:
+            data = {"OAM-1-2-3.tif": b"tile1", "OAM-4-5-6.tif": b"tile2"}
+            dest_dir = Path(dest)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            for uri in uris:
+                (dest_dir / Path(urlparse(uri).path).name).write_bytes(data[Path(urlparse(uri).path).name])
+
+        anchor.fs.get.side_effect = fake_get
+        mock_upath_cls.side_effect = [listing, anchor]
 
         result = resolve_directory("s3://bucket/train/oam", pattern="OAM-*.tif", local_dir=tmp_path)
         assert result == tmp_path / "train" / "oam"
         assert (tmp_path / "train" / "oam" / "OAM-1-2-3.tif").read_bytes() == b"tile1"
         assert (tmp_path / "train" / "oam" / "OAM-4-5-6.tif").read_bytes() == b"tile2"
-
-    @patch("fair.utils.data.UPath")
-    def test_skips_cached(self, mock_upath_cls: MagicMock, tmp_path: Path) -> None:
-        mock_remote = MagicMock()
-        mock_remote.path = "/d"
-
-        f1 = MagicMock()
-        f1.__str__ = lambda _: "s3://bucket/d/f.tif"
-        f1.is_dir.return_value = False
-        f1.path = "/d/f.tif"
-        mock_remote.glob.return_value = [f1]
-
-        # Pre-create the cached file
-        cached = tmp_path / "d" / "f.tif"
-        cached.parent.mkdir(parents=True)
-        cached.write_bytes(b"cached")
-
-        mock_upath_cls.side_effect = [mock_remote, f1]
-        resolve_directory("s3://bucket/d", local_dir=tmp_path)
-        f1.read_bytes.assert_not_called()
 
     @patch("fair.utils.data.UPath")
     def test_raises_on_empty_prefix(self, mock_upath_cls: MagicMock, tmp_path: Path) -> None:

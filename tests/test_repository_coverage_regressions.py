@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock
 
@@ -250,8 +249,20 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
     (source_dir / "nested").mkdir()
     (source_dir / "nested" / "tile.tif").write_bytes(b"tile")
 
+    class DummyFS:
+        def put(self, src: str, dest: str, recursive: bool = False) -> None:
+            src_p = Path(src)
+            base = dest.rstrip("/")
+            if src_p.is_dir() and recursive:
+                for f in src_p.rglob("*"):
+                    if f.is_file():
+                        DummyRemotePath.storage[f"{base}/{f.relative_to(src_p)}"] = f.read_bytes()
+            elif src_p.is_file():
+                DummyRemotePath.storage[base] = src_p.read_bytes()
+
     class DummyRemotePath:
         storage: ClassVar[dict[str, bytes]] = {}
+        fs: ClassVar[DummyFS] = DummyFS()
 
         def __init__(self, path: object, **_kwargs: object) -> None:
             self.path = str(path)
@@ -263,14 +274,6 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
         def is_file(self) -> bool:
             return self._local.is_file() if self._local else self.path in self.storage
 
-        def rglob(self, pattern: str) -> list[DummyRemotePath]:
-            if not self._local:
-                return []
-            return [DummyRemotePath(str(p)) for p in self._local.rglob(pattern)]
-
-        def relative_to(self, other: DummyRemotePath) -> Path:
-            return self._local.relative_to(other._local)  # type: ignore[union-attr]
-
         def read_bytes(self) -> bytes:
             return self._local.read_bytes() if self._local else self.storage[self.path]
 
@@ -281,8 +284,8 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
             suffix = other.as_posix() if isinstance(other, Path) else str(other)
             return DummyRemotePath(f"{self.path.rstrip('/')}/{suffix}")
 
-        def __lt__(self, other: DummyRemotePath) -> bool:
-            return self.path < other.path
+        def __str__(self) -> str:
+            return self.path
 
     monkeypatch.setattr("fair.utils.data.UPath", DummyRemotePath)
     upload_local_directory(source_dir, "s3://bucket/prefix")
@@ -293,10 +296,9 @@ def test_data_helpers_cover_conversions_counts_and_uploads(monkeypatch: pytest.M
     upload_item_assets(missing_item, "s3://bucket/data", "datasets")
     assert missing_item.assets["missing"].href.endswith("does-not-exist.bin")
 
-    monkeypatch.setattr("fair.utils.data.list_files", lambda *_args, **_kwargs: ["s3://bucket/file.tif"])
-    monkeypatch.setattr("fair.utils.data.resolve_path", lambda *_args, **_kwargs: SimpleNamespace(parent=None))
-    with pytest.raises(ValueError, match="dest_dir is still None"):
-        resolve_directory("s3://bucket/path")
+    monkeypatch.setattr("fair.utils.data.list_files", lambda *_args, **_kwargs: [])
+    with pytest.raises(FileNotFoundError, match="No files matching"):
+        resolve_directory("s3://bucket/empty")
 
 
 def test_model_validator_covers_return_types_and_stac_branches(tmp_path: Path) -> None:
