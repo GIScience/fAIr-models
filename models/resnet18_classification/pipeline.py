@@ -209,7 +209,7 @@ def split_dataset(
     dataset_chips: str,
     dataset_labels: str,
     hyperparameters: dict[str, Any],
-) -> Annotated[dict[str, Any], "split_info"]:
+) -> Annotated[dict[str, Any], "split_info_artifact"]:
     val_ratio = hyperparameters.get("val_ratio", 0.2)
     seed = hyperparameters.get("split_seed", 42)
 
@@ -239,7 +239,7 @@ def train_model(
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
-) -> Annotated[Any, "trained_model"]:
+) -> Annotated[Any, "trained_model_artifact"]:
     import torch
     import torch.nn as nn
     from torchvision.models import resnet18

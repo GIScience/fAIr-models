@@ -415,7 +415,7 @@ def split_dataset(
     dataset_chips: str,
     dataset_labels: str,
     hyperparameters: dict[str, Any],
-) -> Annotated[dict[str, Any], "split_info"]:
+) -> Annotated[dict[str, Any], "split_info_artifact"]:
     val_ratio = hyperparameters.get("val_ratio", 0.2)
     chip_size = hyperparameters.get("chip_size", 640)
     seed = hyperparameters.get("split_seed", 42)
@@ -435,7 +435,7 @@ def split_dataset(
     return split_info
 
 
-@step(output_materializers={"trained_model": CheckpointBytesMaterializer})
+@step(output_materializers={"trained_model_artifact": CheckpointBytesMaterializer})
 def train_model(
     dataset_chips: str,
     dataset_labels: str,
@@ -446,7 +446,7 @@ def train_model(
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
-) -> Annotated[Any, "trained_model"]:
+) -> Annotated[Any, "trained_model_artifact"]:
     from ultralytics import YOLO
 
     epochs = hyperparameters["epochs"]

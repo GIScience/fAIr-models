@@ -216,7 +216,7 @@ def split_dataset(
     dataset_chips: str,
     dataset_labels: str,
     hyperparameters: dict[str, Any],
-) -> Annotated[dict[str, Any], "split_info"]:
+) -> Annotated[dict[str, Any], "split_info_artifact"]:
     val_ratio = hyperparameters.get("val_ratio", 0.2)
     seed = hyperparameters.get("split_seed", 42)
     samples_per_epoch = hyperparameters.get("samples_per_epoch", 50)
@@ -245,7 +245,7 @@ def train_model(
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
-) -> Annotated[Any, "trained_model"]:
+) -> Annotated[Any, "trained_model_artifact"]:
     from torchgeo.models import unet
 
     epochs = hyperparameters["epochs"]
