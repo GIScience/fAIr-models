@@ -158,7 +158,7 @@ def _build_dataset(
         separate_files = False
 
     oam = _OAMDataset(paths=local_chips)
-    labels = VectorDataset(paths=local_labels_dir, crs=CRS.from_epsg(4326), res=oam.res, label_name="label")
+    labels = VectorDataset(paths=local_labels_dir, crs=CRS.from_epsg(4326), res=oam.res)
     dataset = oam & labels
 
     if split == "val":
