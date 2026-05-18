@@ -30,7 +30,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 DEFAULT_API = "https://api.fair.krschap.tech"
 DEFAULT_BASE_MODEL = "yolo11n-detection"
 DEFAULT_IMAGERY = "https://tiles.openaerialmap.org/62d85d11d8499800053796c1/0/62d85d11d8499800053796c2/{z}/{x}/{y}"
-# Small AOI over Banepa, Nepal: matches ARCHITECTURE.md User-test sample.
 AOI_POLYGON = [
     [85.51678, 27.63133],
     [85.52323, 27.63133],
@@ -297,9 +296,14 @@ def run(cfg: Config) -> int:
             url = result.get(key)
             if not url or not url.startswith("http"):
                 raise SmokeError(f"missing {key} URL in result: {result}")
-            head = httpx.head(url, timeout=15.0, follow_redirects=True)
-            if head.status_code != 200:
-                raise SmokeError(f"{key} URL returned HTTP {head.status_code}: {url}")
+            probe = httpx.get(
+                url,
+                headers={"Range": "bytes=0-0"},
+                timeout=15.0,
+                follow_redirects=True,
+            )
+            if probe.status_code not in (200, 206):
+                raise SmokeError(f"{key} URL returned HTTP {probe.status_code}: {url}")
             log(f"7) {key} ok")
 
         log(
