@@ -20,6 +20,6 @@ dependencies:
     version: 1.8.1
   - name: zenml
     repository: oci://public.ecr.aws/zenml
-    version: 0.94.0
-digest: sha256:cea73f469ae747ae07e18bc7852d0e29919b94d71a0ef8f7ad1dde1289b5c3fe
-generated: "2026-05-18T12:44:52.276759+02:00"
+    version: 0.94.2
+digest: sha256:d34347b83e938005c52ab154d02e6133ca14e3195b8fb7421030c5fda35a632e
+generated: "2026-05-18T15:34:19.110417+02:00"
