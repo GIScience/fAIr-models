@@ -1,12 +1,10 @@
-"""KNative service management for live model serving.
-
-Public URLs are recorded on each base-model STAC item as the
-`mlm:inference-endpoint` asset. Consumers read STAC; they do not build URLs.
-"""
+"""Per-model KNative Service: single config object, env-overridable."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 import pystac
@@ -14,8 +12,42 @@ import pystac
 KNATIVE_GROUP = "serving.knative.dev"
 KNATIVE_VERSION = "v1"
 KNATIVE_PLURAL = "services"
-DEFAULT_NAMESPACE = "predict"
-S3_CREDENTIALS_SECRET = "s3-credentials"
+
+
+@dataclass(frozen=True)
+class KnativeConfig:
+    namespace: str = "predict"
+    container_port: int = 8080
+    s3_secret_name: str = "s3-credentials"
+    min_scale: str = "0"
+    max_scale: str = "5"
+    scale_down_delay: str = "60s"
+    model_module_env: str = "MODEL_MODULE"
+    cors_origins: str = "*"
+    cors_methods: str = "*"
+    cors_headers: str = "*"
+
+    @classmethod
+    def from_env(cls) -> KnativeConfig:
+        env = os.environ.get
+        return cls(
+            namespace=env("FAIR_KNATIVE_NAMESPACE") or cls.namespace,
+            container_port=int(env("FAIR_KNATIVE_CONTAINER_PORT") or cls.container_port),
+            s3_secret_name=env("FAIR_KNATIVE_S3_SECRET") or cls.s3_secret_name,
+            min_scale=env("FAIR_KNATIVE_MIN_SCALE") or cls.min_scale,
+            max_scale=env("FAIR_KNATIVE_MAX_SCALE") or cls.max_scale,
+            scale_down_delay=env("FAIR_KNATIVE_SCALE_DOWN_DELAY") or cls.scale_down_delay,
+            model_module_env=env("FAIR_KNATIVE_MODEL_MODULE_ENV") or cls.model_module_env,
+            cors_origins=env("FAIR_KNATIVE_CORS_ORIGINS") or cls.cors_origins,
+            cors_methods=env("FAIR_KNATIVE_CORS_METHODS") or cls.cors_methods,
+            cors_headers=env("FAIR_KNATIVE_CORS_HEADERS") or cls.cors_headers,
+        )
+
+
+KNATIVE_CONFIG: KnativeConfig = KnativeConfig.from_env()
+
+DEFAULT_NAMESPACE = KNATIVE_CONFIG.namespace
+S3_CREDENTIALS_SECRET = KNATIVE_CONFIG.s3_secret_name
 
 
 def knative_service_name(name: str) -> str:
@@ -23,9 +55,9 @@ def knative_service_name(name: str) -> str:
     return str(name).lower().replace("_", "-")
 
 
-def knative_service_host(name: str, namespace: str = DEFAULT_NAMESPACE) -> str:
-    service_name = knative_service_name(name)
-    return f"{service_name}.{namespace}.svc.cluster.local"
+def knative_service_host(name: str, namespace: str | None = None) -> str:
+    ns = namespace if namespace is not None else KNATIVE_CONFIG.namespace
+    return f"{knative_service_name(name)}.{ns}.svc.cluster.local"
 
 
 def public_predict_url(name: str, domain: str) -> str:
@@ -45,7 +77,23 @@ def _service_name(item: pystac.Item) -> str:
     return knative_service_name(item.properties.get("mlm:name") or item.id)
 
 
-def build_knative_manifest(item: pystac.Item, namespace: str = DEFAULT_NAMESPACE) -> dict[str, Any]:
+def _container_env(cfg: KnativeConfig, entrypoint: str) -> list[dict[str, str]]:
+    return [
+        {"name": cfg.model_module_env, "value": _module_from_entrypoint(entrypoint)},
+        {"name": "FAIR_KNATIVE_CORS_ORIGINS", "value": cfg.cors_origins},
+        {"name": "FAIR_KNATIVE_CORS_METHODS", "value": cfg.cors_methods},
+        {"name": "FAIR_KNATIVE_CORS_HEADERS", "value": cfg.cors_headers},
+    ]
+
+
+def build_knative_manifest(
+    item: pystac.Item,
+    namespace: str | None = None,
+    config: KnativeConfig | None = None,
+) -> dict[str, Any]:
+    cfg = config or KNATIVE_CONFIG
+    ns = namespace if namespace is not None else cfg.namespace
+
     inference_asset = item.assets.get("mlm:inference")
     if inference_asset is None:
         msg = f"Item '{item.id}' missing 'mlm:inference' asset"
@@ -65,27 +113,25 @@ def build_knative_manifest(item: pystac.Item, namespace: str = DEFAULT_NAMESPACE
         "kind": "Service",
         "metadata": {
             "name": _service_name(item),
-            "namespace": namespace,
+            "namespace": ns,
         },
         "spec": {
             "template": {
                 "metadata": {
                     "annotations": {
-                        "autoscaling.knative.dev/min-scale": "0",
-                        "autoscaling.knative.dev/max-scale": "5",
-                        "autoscaling.knative.dev/scale-down-delay": "60s",
+                        "autoscaling.knative.dev/min-scale": cfg.min_scale,
+                        "autoscaling.knative.dev/max-scale": cfg.max_scale,
+                        "autoscaling.knative.dev/scale-down-delay": cfg.scale_down_delay,
                     },
                 },
                 "spec": {
                     "containers": [
                         {
                             "image": inference_asset.href,
-                            "ports": [{"containerPort": 8080}],
-                            "env": [
-                                {"name": "MODEL_MODULE", "value": _module_from_entrypoint(entrypoint)},
-                            ],
+                            "ports": [{"containerPort": cfg.container_port}],
+                            "env": _container_env(cfg, entrypoint),
                             "envFrom": [
-                                {"secretRef": {"name": S3_CREDENTIALS_SECRET}},
+                                {"secretRef": {"name": cfg.s3_secret_name}},
                             ],
                         }
                     ],
@@ -152,14 +198,32 @@ def _upsert_knative_service(api: Any, manifest: dict[str, Any], namespace: str) 
     )
 
 
-def ensure_knative_service(item: pystac.Item, namespace: str = DEFAULT_NAMESPACE) -> None:
+def ensure_knative_service(
+    item: pystac.Item,
+    namespace: str | None = None,
+    config: KnativeConfig | None = None,
+) -> None:
     if not _knative_serving_installed():
         print(f"skip knative: {KNATIVE_GROUP}/{KNATIVE_VERSION} not registered on cluster")
         return
-    manifest = build_knative_manifest(item, namespace=namespace)
+    cfg = config or KNATIVE_CONFIG
+    ns = namespace if namespace is not None else cfg.namespace
+    manifest = build_knative_manifest(item, namespace=ns, config=cfg)
     api = _custom_objects_api()
 
-    _upsert_knative_service(api, manifest, namespace)
+    _upsert_knative_service(api, manifest, ns)
+
+
+def reconcile_knative_services(
+    items: Iterable[pystac.Item],
+    namespace: str | None = None,
+    config: KnativeConfig | None = None,
+) -> list[str]:
+    applied: list[str] = []
+    for item in items:
+        ensure_knative_service(item, namespace=namespace, config=config)
+        applied.append(item.id)
+    return applied
 
 
 def _knative_serving_installed() -> bool:
@@ -177,16 +241,17 @@ def _knative_serving_installed() -> bool:
     return any(g.name == KNATIVE_GROUP for g in groups)
 
 
-def delete_knative_service(model_name: str, namespace: str = DEFAULT_NAMESPACE) -> None:
+def delete_knative_service(model_name: str, namespace: str | None = None) -> None:
     from kubernetes.client.exceptions import ApiException
 
+    ns = namespace if namespace is not None else KNATIVE_CONFIG.namespace
     api = _custom_objects_api()
     name = knative_service_name(model_name)
     try:
         api.delete_namespaced_custom_object(
             group=KNATIVE_GROUP,
             version=KNATIVE_VERSION,
-            namespace=namespace,
+            namespace=ns,
             plural=KNATIVE_PLURAL,
             name=name,
         )
