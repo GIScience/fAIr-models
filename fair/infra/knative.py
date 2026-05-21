@@ -22,6 +22,15 @@ class KnativeConfig:
     min_scale: str = "0"
     max_scale: str = "5"
     scale_down_delay: str = "60s"
+    # Hard per-pod request cap. 0 = unlimited (Knative default).
+    container_concurrency: int = 1
+    # Soft autoscaler target (in-flight reqs per pod). 0 omits the annotation
+    # and lets Knative derive it from containerConcurrency * 70%.
+    target_concurrency: int = 0
+    cpu_request: str = "500m"
+    cpu_limit: str = "2"
+    memory_request: str = "1Gi"
+    memory_limit: str = "3Gi"
     model_module_env: str = "MODEL_MODULE"
     cors_origins: str = "*"
     cors_methods: str = "*"
@@ -37,6 +46,12 @@ class KnativeConfig:
             min_scale=env("FAIR_KNATIVE_MIN_SCALE") or cls.min_scale,
             max_scale=env("FAIR_KNATIVE_MAX_SCALE") or cls.max_scale,
             scale_down_delay=env("FAIR_KNATIVE_SCALE_DOWN_DELAY") or cls.scale_down_delay,
+            container_concurrency=int(env("FAIR_KNATIVE_CONTAINER_CONCURRENCY") or cls.container_concurrency),
+            target_concurrency=int(env("FAIR_KNATIVE_TARGET_CONCURRENCY") or cls.target_concurrency),
+            cpu_request=env("FAIR_KNATIVE_CPU_REQUEST") or cls.cpu_request,
+            cpu_limit=env("FAIR_KNATIVE_CPU_LIMIT") or cls.cpu_limit,
+            memory_request=env("FAIR_KNATIVE_MEMORY_REQUEST") or cls.memory_request,
+            memory_limit=env("FAIR_KNATIVE_MEMORY_LIMIT") or cls.memory_limit,
             model_module_env=env("FAIR_KNATIVE_MODEL_MODULE_ENV") or cls.model_module_env,
             cors_origins=env("FAIR_KNATIVE_CORS_ORIGINS") or cls.cors_origins,
             cors_methods=env("FAIR_KNATIVE_CORS_METHODS") or cls.cors_methods,
@@ -108,6 +123,14 @@ def build_knative_manifest(
         msg = f"Item '{item.id}' source-code asset missing 'mlm:entrypoint'"
         raise KeyError(msg)
 
+    annotations = {
+        "autoscaling.knative.dev/min-scale": cfg.min_scale,
+        "autoscaling.knative.dev/max-scale": cfg.max_scale,
+        "autoscaling.knative.dev/scale-down-delay": cfg.scale_down_delay,
+    }
+    if cfg.target_concurrency > 0:
+        annotations["autoscaling.knative.dev/target"] = str(cfg.target_concurrency)
+
     return {
         "apiVersion": f"{KNATIVE_GROUP}/{KNATIVE_VERSION}",
         "kind": "Service",
@@ -118,13 +141,10 @@ def build_knative_manifest(
         "spec": {
             "template": {
                 "metadata": {
-                    "annotations": {
-                        "autoscaling.knative.dev/min-scale": cfg.min_scale,
-                        "autoscaling.knative.dev/max-scale": cfg.max_scale,
-                        "autoscaling.knative.dev/scale-down-delay": cfg.scale_down_delay,
-                    },
+                    "annotations": annotations,
                 },
                 "spec": {
+                    "containerConcurrency": cfg.container_concurrency,
                     "containers": [
                         {
                             "image": inference_asset.href,
@@ -133,6 +153,16 @@ def build_knative_manifest(
                             "envFrom": [
                                 {"secretRef": {"name": cfg.s3_secret_name}},
                             ],
+                            "resources": {
+                                "requests": {
+                                    "cpu": cfg.cpu_request,
+                                    "memory": cfg.memory_request,
+                                },
+                                "limits": {
+                                    "cpu": cfg.cpu_limit,
+                                    "memory": cfg.memory_limit,
+                                },
+                            },
                         }
                     ],
                 },

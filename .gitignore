@@ -248,3 +248,4 @@ site/
 docs/schemas/
 runs
 CLAUDE.md
+.vscode/*

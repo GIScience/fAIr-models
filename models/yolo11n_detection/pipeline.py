@@ -269,6 +269,21 @@ def _dataset_cache_dir(chips_path: str, labels_path: str) -> Path:
     return Path(tempfile.gettempdir()) / f"yolo_dataset_{key}"
 
 
+def _subset_chips_dir(chips_path: str, fraction: float) -> str:
+    if fraction >= 1.0:
+        return chips_path
+
+    from fair.utils.data import resolve_directory
+
+    local = resolve_directory(chips_path)
+    chips = sorted(local.rglob("*.tif"))
+    step = max(1, round(1 / fraction))
+    subset = Path(tempfile.mkdtemp(prefix="yolo_chips_subset_"))
+    for chip in chips[::step]:
+        (subset / chip.name).symlink_to(chip)
+    return str(subset)
+
+
 def _coco_from_geojson_and_chips(chips_dir: Path, geojson_path: Path) -> dict[str, Any]:
     """Build COCO-style detection labels from a GeoJSON polygon FeatureCollection."""
     import rasterio
@@ -420,7 +435,8 @@ def split_dataset(
     chip_size = hyperparameters.get("chip_size", 640)
     seed = hyperparameters.get("split_seed", 42)
 
-    yolo_dir, train_count, val_count = _prepare_yolo_dataset(dataset_chips, dataset_labels, chip_size, val_ratio, seed)
+    chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+    yolo_dir, train_count, val_count = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio, seed)
 
     split_info = {
         "strategy": "random",
@@ -458,7 +474,8 @@ def train_model(
     yolo_dir = Path(split_info["_yolo_dir"])
     if not (yolo_dir / "data.yaml").exists():
         val_ratio = split_info["val_ratio"]
-        yolo_dir, _, _ = _prepare_yolo_dataset(dataset_chips, dataset_labels, chip_size, val_ratio)
+        chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+        yolo_dir, _, _ = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio)
 
     device = _get_device()
 
@@ -510,7 +527,8 @@ def evaluate_model(
     yolo_dir = Path(split_info["_yolo_dir"])
     if not (yolo_dir / "data.yaml").exists():
         val_ratio = split_info["val_ratio"]
-        yolo_dir, _, _ = _prepare_yolo_dataset(dataset_chips, dataset_labels, chip_size, val_ratio)
+        chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+        yolo_dir, _, _ = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio)
 
     model = _restore_checkpoint(trained_model)
     results = model.val(data=str(yolo_dir / "data.yaml"), imgsz=chip_size, verbose=False)
