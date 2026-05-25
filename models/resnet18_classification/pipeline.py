@@ -335,6 +335,8 @@ def train_model(
             mlflow.log_metric("train_loss", avg_train_loss, step=epoch)  # ty: ignore[possibly-missing-attribute]
             mlflow.log_metric("val_loss", avg_val_loss, step=epoch)  # ty: ignore[possibly-missing-attribute]
             log_metadata(metadata={"loss": avg_train_loss, "epoch": epoch + 1})
+            msg = f"epoch {epoch + 1}/{epochs}  train_loss={avg_train_loss:.4f}  val_loss={avg_val_loss:.4f}"
+            print(msg, flush=True)
 
         from fair.zenml.metrics import log_loss_history
 
