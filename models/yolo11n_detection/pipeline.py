@@ -272,11 +272,9 @@ def _dataset_cache_dir(chips_path: str, labels_path: str) -> Path:
 def _subset_chips_dir(chips_path: str, fraction: float) -> str:
     if fraction >= 1.0:
         return chips_path
-
     from fair.utils.data import resolve_directory
 
-    local = resolve_directory(chips_path)
-    chips = sorted(local.rglob("*.tif"))
+    chips = sorted(resolve_directory(chips_path).rglob("*.tif"))
     step = max(1, round(1 / fraction))
     subset = Path(tempfile.mkdtemp(prefix="yolo_chips_subset_"))
     for chip in chips[::step]:
