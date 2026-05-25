@@ -281,7 +281,7 @@
       ]
     },
     "model": {
-      "href": "https://raw.githubusercontent.com/hotosm/fAIr-models/refs/heads/master/models/yolo11n_detection/artifacts/yolo11n_detection.onnx",
+      "href": "https://huggingface.co/hotosm/fair-ci-models/resolve/bf3692ffeadc18b52af5821798f8ab21bbc3cade/yolo11n_detection.onnx",
       "title": "Portable ONNX inference model",
       "type": "application/octet-stream; framework=onnx",
       "roles": [
