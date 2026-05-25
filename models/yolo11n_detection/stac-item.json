@@ -255,6 +255,14 @@
         "min": 64,
         "max": 1280,
         "description": "Image chip size for training and inference"
+      },
+      {
+        "key": "sample_fraction",
+        "type": "float",
+        "default": 1.0,
+        "min": 0.001,
+        "max": 1.0,
+        "description": "Fraction of chip files used during training (stride-sampled; <1.0 enables fast smoke / CI runs)"
       }
     ]
   },

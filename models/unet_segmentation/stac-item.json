@@ -310,6 +310,14 @@
         "min": 0,
         "max": 255,
         "description": "Minimum class index value to retain as a foreground prediction at inference"
+      },
+      {
+        "key": "sample_fraction",
+        "type": "float",
+        "default": 1.0,
+        "min": 0.001,
+        "max": 1.0,
+        "description": "Fraction of chip files used during training (stride-sampled; <1.0 enables fast smoke / CI runs)"
       }
     ]
   },
