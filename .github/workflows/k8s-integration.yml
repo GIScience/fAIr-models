@@ -75,4 +75,6 @@ jobs:
       - name: Run example pipelines
         env:
           FAIR_CI: "1"
+          FAIR_FORCE_CPU: "1"
+          FAIR_LABEL_DOMAIN: fair
         run: just example
