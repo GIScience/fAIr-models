@@ -61,12 +61,7 @@
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
     "keywords": [
-      "Municipal Solid Waste",
-      "Open dumping",
-      "OpenAerialMap",
-      "Crowdsourced UAV Imagery",
-      "Sub-Saharan Africa",
-      "Computer Vision"
+      "polygon"
     ],
     "license": "MIT",
     "version": "1",
@@ -120,7 +115,7 @@
         },
         "pre_processing_function": {
           "format": "python",
-          "expression": "models.unet_segmentation.pipeline:preprocess"
+          "expression": "models.yolo11xcls_waste_grid_segmentation.pipeline:preprocess"
         }
       }
     ],
@@ -159,7 +154,7 @@
         ],
         "post_processing_function": {
           "format": "python",
-          "expression": "models.unet_segmentation.pipeline:postprocess"
+          "expression": "models.yolo11xcls_waste_grid_segmentation.pipeline:postprocess"
         },
         "bands": []
       }
@@ -316,8 +311,8 @@
   },
   "assets": {
     "checkpoint": {
-      "href": "https://hf.co/isaaccorley/unet_resnet34_oam_rgb_tcd/resolve/40c914bbcbe43a6a87c81adb0a22ff2d4a53204d/unet_resnet34_oam_rgb_tcd-9472042e.pth",
-      "title": "Pretrained weights (OAM-TCD UNet ResNet34)",
+      "href": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/raw/refs/heads/main/data/models/train/weights/best.pt",
+      "title": "Pretrained YOLO11x-cls model weights for Solid Waster detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
         "mlm:model",
@@ -337,7 +332,7 @@
       ]
     },
     "model": {
-      "href": "https://huggingface.co/hotosm/fair-ci-models/resolve/bf3692ffeadc18b52af5821798f8ab21bbc3cade/unet_segmentation.onnx",
+      "href": "https://huggingface.co/hotosm/fair-ci-models/resolve/bf3692ffeadc18b52af5821798f8ab21bbc3cade/yolo11n_detection.onnx",
       "title": "Portable ONNX inference model",
       "type": "application/octet-stream; framework=onnx",
       "roles": [
@@ -358,15 +353,15 @@
       ]
     },
     "source-code": {
-      "href": "https://github.com/hotosm/fAIr-models/tree/main/models/unet_segmentation",
+      "href": "https://github.com/GiScience/fAIr-models/tree/main/models/yolo11xcls_waste_grid_segmentation",
       "type": "text/html",
       "roles": [
         "code"
       ],
-      "mlm:entrypoint": "models.unet_segmentation.pipeline:predict"
+      "mlm:entrypoint": "models.yolo11xcls_waste_grid_segmentation.pipeline:predict"
     },
     "mlm:training": {
-      "href": "ghcr.io/hotosm/fair-models/unet_segmentation:latest",
+      "href": "ghcr.io/hotosm/fair-models/yolo11xcls_waste_grid_segmentation:latest",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Training Docker Image",
       "roles": [
@@ -374,7 +369,7 @@
       ]
     },
     "mlm:inference": {
-      "href": "ghcr.io/hotosm/fair-models/unet_segmentation:latest-inference",
+      "href": "ghcr.io/hotosm/fair-models/yolo11xcls_waste_grid_segmentation:latest-inference",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Inference Docker Image",
       "roles": [
@@ -382,7 +377,7 @@
       ]
     },
     "readme": {
-      "href": "https://raw.githubusercontent.com/hotosm/fAIr-models/refs/heads/main/models/unet_segmentation/README.md",
+      "href": "https://raw.githubusercontent.com/GiScience/fAIr-models/refs/heads/main/models/yolo11xcls_waste_grid_segmentation/README.md",
       "type": "text/markdown",
       "roles": [
         "metadata"

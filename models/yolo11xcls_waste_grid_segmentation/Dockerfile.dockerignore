@@ -1,6 +1,6 @@
 # BuildKit uses <Dockerfile>.dockerignore automatically (no repo-level side effects)
 *
-!models/unet_segmentation/
+!models/yolo11xcls_waste_grid_segmentation/
 !fair/
 !pyproject.toml
 !README.md

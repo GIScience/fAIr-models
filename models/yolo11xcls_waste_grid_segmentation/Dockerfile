@@ -3,10 +3,9 @@ FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS builder
 ENV UV_SYSTEM_PYTHON=1 UV_LINK_MODE=copy
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libgdal-dev \
+    build-essential libgdal-dev libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# TODO: remove universal-pathlib once fair-py-ops is published with it as a dependency
 COPY pyproject.toml README.md fair_zenml_patch.pth /tmp/fair-src/
 COPY fair /tmp/fair-src/fair
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -15,7 +14,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --extra-index-url https://download.pytorch.org/whl/cpu \
     --index-strategy unsafe-best-match \
     torch==2.10.0 \
-    torchgeo==0.9.0 \
+    "ultralytics>=8.4.0" \
+    rasterio \
+    pyproj \
     onnx \
     onnxscript \
     /tmp/fair-src[k8s,serve]
@@ -26,7 +27,7 @@ FROM python:3.13-slim-trixie AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libexpat1 libgdal36 \
+    libexpat1 libgdal36 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
@@ -76,4 +77,3 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH=/app
 EXPOSE 8080
 ENTRYPOINT ["/app/.venv/bin/python", "-m", "uvicorn"]
 CMD ["fair.serve.base:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]
-
