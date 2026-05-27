@@ -17,15 +17,15 @@ import pytest
 @pytest.fixture(scope="session")
 def pretrained_weights(tmp_path_factory: pytest.TempPathFactory) -> str:
     import torch
-    from torchgeo.models import unet
+    from ultralytics import YOLO
 
-    cache = tmp_path_factory.mktemp("unet_weights") / "pretrained.pth"
-    torch.save(unet(weights=None, classes=2).state_dict(), cache)
+    cache = tmp_path_factory.mktemp("yolo11xcls_weights") / "pretrained.pth"
+    torch.save(YOLO("YOLO11x-cls.yaml").state_dict(), cache)
     return str(cache)
 
 
 def test_split_dataset(toy_chips: Path, toy_labels: Path, base_hyperparameters: dict[str, Any]) -> None:
-    from models.unet_segmentation.pipeline import split_dataset
+    from models.yolo11xcls_waste_grid_segmentation.pipeline import split_dataset
 
     info = split_dataset.entrypoint(
         dataset_chips=str(toy_chips),
@@ -44,7 +44,7 @@ def test_train_model(
     base_hyperparameters: dict[str, Any],
     pretrained_weights: str,
 ) -> None:
-    from models.unet_segmentation.pipeline import split_dataset, train_model
+    from models.yolo11xcls_waste_grid_segmentation.pipeline import split_dataset, train_model
 
     split_info = split_dataset.entrypoint(
         dataset_chips=str(toy_chips),
@@ -71,7 +71,7 @@ def test_evaluate_model(
     base_hyperparameters: dict[str, Any],
     pretrained_weights: str,
 ) -> None:
-    from models.unet_segmentation.pipeline import evaluate_model, split_dataset, train_model
+    from models.yolo11xcls_waste_grid_segmentation.pipeline import evaluate_model, split_dataset, train_model
 
     split_info = split_dataset.entrypoint(
         dataset_chips=str(toy_chips),
@@ -102,9 +102,8 @@ def test_evaluate_model(
 
 def test_export_onnx(base_hyperparameters: dict[str, Any]) -> None:
     import onnx
-    from torchgeo.models import unet
 
-    from models.unet_segmentation.pipeline import export_onnx
+    from models.yolo11xcls_waste_grid_segmentation.pipeline import export_onnx
 
     model = unet(weights=None, classes=2).cpu()
     onnx_bytes = export_onnx.entrypoint(

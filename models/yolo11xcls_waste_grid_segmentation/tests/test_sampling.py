@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from models.unet_segmentation.pipeline import _subset_chips_dir
+from models.yolo11xcls_waste_grid_segmentation.pipeline import _subset_chips_dir
 
 
 def _populate(chips_dir: Path, n: int) -> None:
