@@ -1,9 +1,13 @@
-"""ZenML pipeline for UNet building segmentation.
+"""ZenML pipeline for YOLOv11n building detection.
 
-Entrypoints referenced by models/unet_segmentation/stac-item.json.
-Pretrained weights: OAM-TCD (arxiv.org/abs/2407.11743).
+Entrypoints referenced by models/yolo11n_detection/stac-item.json.
+Pretrained backbone: Ultralytics YOLOv11n COCO.
 """
 
+import hashlib
+import json
+import random
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
@@ -11,24 +15,10 @@ from typing import Annotated, Any
 from zenml import log_metadata, pipeline, step
 
 from fair.zenml.instrumentation import log_evaluation_results, mlflow_training_context
-from fair.zenml.materializers import ONNXMaterializer
+from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializer
 
-MODEL_INPUT_SIZE = 256
-
-
-def _subset_chips_dir(chips_path: str, fraction: float) -> str:
-    if fraction >= 1.0:
-        return chips_path
-    from fair.utils.data import resolve_directory
-
-    chips = sorted(resolve_directory(chips_path).rglob("OAM-*.tif"))
-    step = max(1, round(1 / fraction))
-    subset = Path(tempfile.mkdtemp(prefix="yolo11xcls_chips_subset_"))
-    for chip in chips[::step]:
-        (subset / chip.name).symlink_to(chip)
-        sidecar = chip.with_name(chip.name + ".aux.xml")
-        (subset / sidecar.name).symlink_to(sidecar)
-    return str(subset)
+MODEL_INPUT_SIZE = 640
+CHIP_SIZE = 256
 
 
 def _get_device() -> str:
@@ -41,30 +31,6 @@ def _get_device() -> str:
     return "cpu"
 
 
-def _vectorize_segmentation_mask(mask, transform, crs, min_class_value: int = 1):
-    import numpy as np
-    import rasterio.features
-    from pyproj import Transformer
-
-    mask_uint8 = mask.astype(np.uint8)
-    needs_reproject = crs is not None and str(crs) != "EPSG:4326"
-    transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True) if needs_reproject else None
-
-    features = []
-    for geom, value in rasterio.features.shapes(mask_uint8, transform=transform):
-        if value < min_class_value:
-            continue
-        if transformer:
-            coords = geom["coordinates"]
-            geom["coordinates"] = [[list(transformer.transform(x, y)) for x, y in ring] for ring in coords]
-        features.append({"type": "Feature", "properties": {"class": int(value)}, "geometry": geom})
-    return features
-
-
-def _build_feature_collection(features):
-    return {"type": "FeatureCollection", "features": features}
-
-
 def _download_checkpoint(url: str) -> Path:
     from upath import UPath
 
@@ -73,54 +39,207 @@ def _download_checkpoint(url: str) -> Path:
     return local_path
 
 
-def preprocess(batch: dict[str, Any]) -> tuple[Any, Any]:
-    images = batch["image"].float() / 255.0
-    masks = batch["mask"].long().squeeze(1)
-    return images, masks
+def _log_yolo_loss_history(model: Any) -> None:
+    import csv
+
+    from fair.zenml.metrics import log_loss_history
+
+    save_dir = getattr(model.trainer, "save_dir", None) if hasattr(model, "trainer") else None
+    if save_dir is None:
+        return
+    results_csv = Path(save_dir) / "results.csv"
+    if not results_csv.exists():
+        return
+
+    train_losses: list[float] = []
+    val_losses: list[float] = []
+    with results_csv.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            stripped = {k.strip(): v.strip() for k, v in row.items()}
+            train_loss = stripped.get("train/box_loss")
+            val_loss = stripped.get("val/box_loss")
+            if train_loss is not None and val_loss is not None:
+                train_losses.append(float(train_loss))
+                val_losses.append(float(val_loss))
+
+    if train_losses:
+        import mlflow
+
+        for epoch, (tl, vl) in enumerate(zip(train_losses, val_losses, strict=True)):
+            mlflow.log_metric("train_loss", tl, step=epoch)  # ty: ignore[possibly-missing-attribute]
+            mlflow.log_metric("val_loss", vl, step=epoch)  # ty: ignore[possibly-missing-attribute]
+        log_loss_history(train_losses, val_losses)
 
 
-def postprocess(logits: Any) -> Any:
+def _pixel_bbox_to_geo_feature(bbox_xyxy, transform, crs, properties):
+    from pyproj import Transformer
+
+    x1, y1, x2, y2 = bbox_xyxy
+    corners_pixel = [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
+    corners_crs = [transform * (col, row) for col, row in corners_pixel]
+
+    if crs is not None and str(crs) != "EPSG:4326":
+        t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        corners_geo = [list(t.transform(cx, cy)) for cx, cy in corners_crs]
+    else:
+        corners_geo = [list(c) for c in corners_crs]
+
+    return {
+        "type": "Feature",
+        "properties": properties,
+        "geometry": {"type": "Polygon", "coordinates": [corners_geo]},
+    }
+
+
+def _build_feature_collection(features):
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _restore_checkpoint(trained_model: Any):
+    from ultralytics import YOLO
+
+    if isinstance(trained_model, YOLO):
+        return trained_model
+    if isinstance(trained_model, bytes):
+        checkpoint = Path(tempfile.mkdtemp()) / "best.pt"
+        checkpoint.write_bytes(trained_model)
+        return YOLO(str(checkpoint))
+    return YOLO(trained_model)
+
+
+def preprocess(image_path: Any, chip_size: int = 640) -> Any:
     import numpy as np
+    import rasterio
+    import torch
+    import torch.nn.functional as F
 
-    return logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
+    with rasterio.open(image_path) as src:
+        arr = src.read([1, 2, 3]).astype(np.float32) / 255.0
+    tensor = torch.from_numpy(arr).unsqueeze(0)
+    if tensor.shape[-2:] != (chip_size, chip_size):
+        tensor = F.interpolate(tensor, size=(chip_size, chip_size), mode="bilinear", align_corners=False)
+    return tensor
+
+
+def postprocess(results: Any) -> list[dict[str, Any]]:
+    detections: list[dict[str, Any]] = []
+    for result in results:
+        for box in result.boxes:
+            detections.append(
+                {
+                    "bbox": box.xyxy[0].tolist(),
+                    "confidence": box.conf.item(),
+                    "class": int(box.cls.item()),
+                }
+            )
+    return detections
 
 
 def _preprocess_onnx_image(img_path: Any) -> tuple[Any, Any, Any]:
     import numpy as np
     import rasterio
+    from PIL import Image
 
     with rasterio.open(img_path) as src:
         arr = src.read([1, 2, 3]).astype(np.float32) / 255.0
         transform = src.transform
         crs = src.crs
-    if arr.shape[-2:] != (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE):
-        arr = _resize_chw(arr, MODEL_INPUT_SIZE)
-    return arr[np.newaxis, ...], transform, crs
 
-
-def _resize_chw(arr: Any, size: int) -> Any:
-    import numpy as np
-    from PIL import Image
-
-    channels = [
-        np.asarray(Image.fromarray(arr[c]).resize((size, size), Image.Resampling.BILINEAR)) for c in range(arr.shape[0])
+    resized = [
+        np.asarray(Image.fromarray(arr[c]).resize((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), Image.Resampling.BILINEAR))
+        for c in range(arr.shape[0])
     ]
-    return np.stack(channels, axis=0).astype(np.float32)
+    batch = np.stack(resized, axis=0)[np.newaxis, ...].astype(np.float32)
+    return batch, transform, crs
+
+
+def _nms(boxes: Any, scores: Any, iou_threshold: float) -> list[int]:
+    import numpy as np
+
+    if len(boxes) == 0:
+        return []
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+
+    keep: list[int] = []
+    while order.size > 0:
+        i = int(order[0])
+        keep.append(i)
+        if order.size == 1:
+            break
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
+        order = order[1:][iou <= iou_threshold]
+    return keep
+
+
+def _decode_yolo_output(
+    output: Any,
+    confidence_threshold: float,
+    iou_threshold: float,
+) -> list[dict[str, Any]]:
+    """Decode ultralytics YOLO ONNX output: shape (1, 4+nc, num_anchors)."""
+    import numpy as np
+
+    preds = np.squeeze(output, axis=0)
+    if preds.shape[0] < preds.shape[1]:
+        preds = preds.transpose(1, 0)
+
+    boxes_cxcywh = preds[:, :4]
+    class_scores = preds[:, 4:]
+    if class_scores.shape[1] == 0:
+        return []
+    class_ids = class_scores.argmax(axis=1)
+    confidences = class_scores.max(axis=1)
+
+    keep_mask = confidences >= confidence_threshold
+    if not keep_mask.any():
+        return []
+    boxes_cxcywh = boxes_cxcywh[keep_mask]
+    confidences = confidences[keep_mask]
+    class_ids = class_ids[keep_mask]
+
+    cx, cy, w, h = boxes_cxcywh[:, 0], boxes_cxcywh[:, 1], boxes_cxcywh[:, 2], boxes_cxcywh[:, 3]
+    boxes_xyxy = np.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], axis=1)
+
+    keep_idx = _nms(boxes_xyxy, confidences, iou_threshold)
+
+    scale = CHIP_SIZE / MODEL_INPUT_SIZE
+    detections: list[dict[str, Any]] = []
+    for idx in keep_idx:
+        x1, y1, x2, y2 = boxes_xyxy[idx] * scale
+        detections.append(
+            {
+                "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                "confidence": float(confidences[idx]),
+                "class": int(class_ids[idx]),
+            }
+        )
+    return detections
 
 
 def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str, Any]:
-    import numpy as np
-
     from fair.utils.data import resolve_directory
 
     if "confidence_threshold" not in params:
         raise ValueError("params['confidence_threshold'] is required")
     confidence_threshold = float(params["confidence_threshold"])
-    min_class_value = int(params.get("min_class_value", 1))
+    iou_threshold = float(params.get("iou_threshold", 0.45))
     input_name = session.get_inputs()[0].name
 
     input_dir = resolve_directory(input_images)
-    patterns = ("*.png", "*.tif", "*.tiff")
+    patterns = ("*.png", "*.tif", "*.tiff", "*.jpg")
     img_paths = sorted(p for pat in patterns for p in input_dir.glob(pat))
     if not img_paths:
         msg = f"No input images found in {input_dir}"
@@ -129,102 +248,181 @@ def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str
     features: list[dict[str, Any]] = []
     for img_path in img_paths:
         batch, transform, crs = _preprocess_onnx_image(img_path)
-        logits = session.run(None, {input_name: batch})[0]
-        probs = _softmax(logits[0], axis=0)
-        mask = probs.argmax(axis=0)
-        top_prob = probs.max(axis=0)
-        mask = np.where(top_prob >= confidence_threshold, mask, 0)
-        features.extend(_vectorize_segmentation_mask(mask, transform, crs, min_class_value))
+        output = session.run(None, {input_name: batch})[0]
+        for det in _decode_yolo_output(output, confidence_threshold, iou_threshold):
+            feature = _pixel_bbox_to_geo_feature(
+                det["bbox"],
+                transform,
+                crs,
+                {
+                    "confidence": round(det["confidence"], 4),
+                    "class": det["class"],
+                    "source": img_path.name,
+                },
+            )
+            features.append(feature)
     return _build_feature_collection(features)
 
 
-def _softmax(logits: Any, axis: int) -> Any:
-    import numpy as np
-
-    shifted = logits - logits.max(axis=axis, keepdims=True)
-    exp = np.exp(shifted)
-    return exp / exp.sum(axis=axis, keepdims=True)
+def _dataset_cache_dir(chips_path: str, labels_path: str) -> Path:
+    key = hashlib.sha256(f"{chips_path}|{labels_path}".encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"yolo_dataset_{key}"
 
 
-def _build_dataset(
+def _subset_chips_dir(chips_path: str, fraction: float) -> str:
+    if fraction >= 1.0:
+        return chips_path
+    from fair.utils.data import resolve_directory
+
+    chips = sorted(resolve_directory(chips_path).rglob("*.tif"))
+    step = max(1, round(1 / fraction))
+    subset = Path(tempfile.mkdtemp(prefix="yolo_chips_subset_"))
+    for chip in chips[::step]:
+        (subset / chip.name).symlink_to(chip)
+        sidecar = chip.with_name(chip.name + ".aux.xml")
+        (subset / sidecar.name).symlink_to(sidecar)
+    return str(subset)
+
+
+def _coco_from_geojson_and_chips(chips_dir: Path, geojson_path: Path) -> dict[str, Any]:
+    """Build COCO-style detection labels from a GeoJSON polygon FeatureCollection."""
+    import rasterio
+    from rasterio.transform import rowcol
+    from shapely.geometry import box, shape
+
+    with open(geojson_path, encoding="utf-8") as f:
+        data = json.load(f)
+    polygons = [shape(feat["geometry"]) for feat in data.get("features", [])]
+
+    chips = sorted(chips_dir.rglob("*.tif"))
+    if not chips:
+        msg = f"No .tif chips found under {chips_dir}"
+        raise FileNotFoundError(msg)
+
+    images: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+    annotation_id = 1
+    for image_id, chip in enumerate(chips, start=1):
+        with rasterio.open(chip) as src:
+            chip_box = box(*src.bounds)
+            transform = src.transform
+            width, height = src.width, src.height
+        images.append({"id": image_id, "file_name": chip.name, "width": width, "height": height})
+        for poly in polygons:
+            if not poly.intersects(chip_box):
+                continue
+            clipped = poly.intersection(chip_box)
+            if clipped.is_empty:
+                continue
+            minx, miny, maxx, maxy = clipped.bounds
+            row_min, col_min = rowcol(transform, minx, maxy)
+            row_max, col_max = rowcol(transform, maxx, miny)
+            x = max(0, int(col_min))
+            y = max(0, int(row_min))
+            x2 = min(width, int(col_max))
+            y2 = min(height, int(row_max))
+            w = x2 - x
+            h = y2 - y
+            if w <= 0 or h <= 0:
+                continue
+            annotations.append(
+                {
+                    "id": annotation_id,
+                    "image_id": image_id,
+                    "category_id": 0,
+                    "bbox": [float(x), float(y), float(w), float(h)],
+                    "area": float(w * h),
+                    "iscrowd": 0,
+                }
+            )
+            annotation_id += 1
+    return {
+        "images": images,
+        "annotations": annotations,
+        "categories": [{"id": 0, "name": "building"}],
+    }
+
+
+def _resolve_coco_labels(labels_path: str, chips_dir: Path) -> Path:
+    """Resolve the dataset's labels asset into a local COCO JSON file path."""
+    from fair.utils.data import resolve_directory, resolve_path
+
+    if labels_path.endswith(".json"):
+        return resolve_path(labels_path)
+
+    local_labels_dir = resolve_directory(labels_path, "*.geojson")
+    geojson_files = sorted(local_labels_dir.rglob("*.geojson"))
+    if not geojson_files:
+        msg = f"No .geojson files found under {labels_path}"
+        raise FileNotFoundError(msg)
+
+    coco = _coco_from_geojson_and_chips(chips_dir, geojson_files[0])
+    coco_path = local_labels_dir / "_yolo_detection_labels.json"
+    coco_path.write_text(json.dumps(coco))
+    return coco_path
+
+
+def _prepare_yolo_dataset(
     chips_path: str,
     labels_path: str,
     chip_size: int,
-    length: int,
-    batch_size: int = 4,
-    split: str = "train",
+    val_ratio: float = 0.2,
     seed: int = 42,
-    sample_fraction: float = 1.0,
-) -> Any:
-    """Intersect OAM raster + GeoJSON vector GeoDatasets via torchgeo."""
-    from pyproj import CRS
-    from torch.utils.data import DataLoader
-    from torchgeo.datasets import RasterDataset, VectorDataset, stack_samples
-    from torchgeo.samplers import GridGeoSampler, RandomGeoSampler, Units
-
+) -> tuple[Path, int, int]:
     from fair.utils.data import resolve_directory
 
-    local_chips = _subset_chips_dir(str(resolve_directory(chips_path, "OAM-*")), sample_fraction)
-    local_labels_dir = str(resolve_directory(labels_path, "*.geojson"))
+    yolo_dir = _dataset_cache_dir(chips_path, labels_path)
+    if (yolo_dir / "data.yaml").exists():
+        train_count = len(list((yolo_dir / "images" / "train").iterdir()))
+        val_count = len(list((yolo_dir / "images" / "val").iterdir()))
+        return yolo_dir, train_count, val_count
 
-    class _OAMDataset(RasterDataset):  # TODO: replace with OAM dataset after torchgeo release
-        filename_glob = "OAM-*.tif"
-        filename_regex = r"^OAM-(?P<x>\d+)-(?P<y>\d+)-(?P<z>\d+)\.tif$"
-        is_image = True
-        separate_files = False
+    local_chips = resolve_directory(chips_path)
+    local_json = _resolve_coco_labels(labels_path, local_chips)
 
-    oam = _OAMDataset(paths=local_chips)
-    labels = VectorDataset(paths=local_labels_dir, crs=CRS.from_epsg(4326), res=oam.res)
-    dataset = oam & labels
+    with open(local_json, encoding="utf-8") as f:
+        coco = json.load(f)
 
-    if split == "val":
-        sampler = GridGeoSampler(dataset, size=chip_size, stride=chip_size, units=Units.PIXELS)
-        return DataLoader(dataset, sampler=sampler, batch_size=batch_size, collate_fn=stack_samples)
+    img_id_to_name = {img["id"]: img["file_name"] for img in coco["images"]}
+    img_id_to_size = {img["id"]: (img["width"], img["height"]) for img in coco["images"]}
+    annotations_by_image: dict[int, list[dict[str, Any]]] = {}
+    for ann in coco["annotations"]:
+        annotations_by_image.setdefault(ann["image_id"], []).append(ann)
 
-    import torch
+    if yolo_dir.exists():
+        shutil.rmtree(yolo_dir)
+    for split in ("train", "val"):
+        (yolo_dir / "images" / split).mkdir(parents=True)
+        (yolo_dir / "labels" / split).mkdir(parents=True)
 
-    generator = torch.Generator().manual_seed(seed)
-    sampler = RandomGeoSampler(dataset, size=chip_size, length=length, units=Units.PIXELS, generator=generator)
-    return DataLoader(dataset, sampler=sampler, batch_size=batch_size, collate_fn=stack_samples)
+    available_ids = [img_id for img_id, fn in img_id_to_name.items() if (local_chips / fn).exists()]
+    rng = random.Random(seed)
+    rng.shuffle(available_ids)
+    val_count = max(1, int(len(available_ids) * val_ratio))
+    val_ids = set(available_ids[-val_count:])
 
+    for img_id in available_ids:
+        filename = img_id_to_name[img_id]
+        split = "val" if img_id in val_ids else "train"
+        shutil.copy2(local_chips / filename, yolo_dir / "images" / split / filename)
 
-def _get_optimizers() -> dict[str, Any]:
-    import torch
+        w, h = img_id_to_size[img_id]
+        label_file = yolo_dir / "labels" / split / Path(filename).with_suffix(".txt").name
+        lines = []
+        for ann in annotations_by_image.get(img_id, []):
+            bx, by, bw, bh = ann["bbox"]
+            cx = (bx + bw / 2) / w
+            cy = (by + bh / 2) / h
+            nw = bw / w
+            nh = bh / h
+            lines.append(f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+        label_file.write_text("\n".join(lines))
 
-    return {
-        "Adam": torch.optim.Adam,
-        "AdamW": torch.optim.AdamW,
-        "SGD": torch.optim.SGD,
-    }
+    data_yaml = yolo_dir / "data.yaml"
+    data_yaml.write_text(f"path: {yolo_dir}\ntrain: images/train\nval: images/val\nnc: 1\nnames: ['building']\n")
 
-
-def _get_losses() -> dict[str, Any]:
-    import torch.nn as nn
-
-    return {
-        "CrossEntropyLoss": nn.CrossEntropyLoss,
-        "BCEWithLogitsLoss": nn.BCEWithLogitsLoss,
-    }
-
-
-def _train_step(
-    model: Any,
-    batch: dict[str, Any],
-    criterion: Any,
-    optimizer: Any,
-    device: str,
-    max_grad_norm: float,
-) -> float:
-    import torch
-
-    images, masks = preprocess(batch)
-    images, masks = images.to(device), masks.to(device)
-    loss = criterion(model(images), masks)
-    optimizer.zero_grad()
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
-    optimizer.step()
-    return loss.item()
+    train_count = len(available_ids) - val_count
+    return yolo_dir, train_count, val_count
 
 
 @step
@@ -234,135 +432,85 @@ def split_dataset(
     hyperparameters: dict[str, Any],
 ) -> Annotated[dict[str, Any], "split_info_artifact"]:
     val_ratio = hyperparameters.get("val_ratio", 0.2)
+    chip_size = hyperparameters.get("chip_size", 640)
     seed = hyperparameters.get("split_seed", 42)
-    samples_per_epoch = hyperparameters.get("samples_per_epoch", 50)
-    val_samples = max(int(samples_per_epoch * val_ratio), 10)
+
+    chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+    yolo_dir, train_count, val_count = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio, seed)
 
     split_info = {
-        "strategy": "spatial",
+        "strategy": "random",
         "val_ratio": val_ratio,
         "seed": seed,
-        "train_count": samples_per_epoch,
-        "val_count": val_samples,
-        "description": "Spatial split: RandomGeoSampler for train, GridGeoSampler for val (non-overlapping tiles)",
+        "train_count": train_count,
+        "val_count": val_count,
+        "description": f"Seeded random shuffle of image IDs, last {val_ratio:.0%} held out for validation",
+        "_yolo_dir": str(yolo_dir),
     }
-    log_metadata(metadata={"fair/split": split_info})
+    log_metadata(metadata={"fair/split": {k: v for k, v in split_info.items() if not k.startswith("_")}})
     return split_info
 
 
-@step
+@step(output_materializers={"trained_model_artifact": CheckpointBytesMaterializer})
 def train_model(
     dataset_chips: str,
     dataset_labels: str,
     base_model_weights: str,
     hyperparameters: dict[str, Any],
     split_info: dict[str, Any],
-    num_classes: int,
+    num_classes: int = 1,
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
 ) -> Annotated[Any, "trained_model_artifact"]:
-    from torchgeo.models import unet
+    from ultralytics import YOLO
 
     epochs = hyperparameters["epochs"]
-    batch_size = hyperparameters.get("batch_size", 4)
-    learning_rate = hyperparameters.get("learning_rate", 0.0001)
-    weight_decay = hyperparameters.get("weight_decay", 0.0001)
-    chip_size = hyperparameters.get("chip_size", 256)
-    samples_per_epoch = hyperparameters.get("samples_per_epoch", 50)
-    sample_fraction = hyperparameters.get("sample_fraction", 1.0)
-    optimizer_name = hyperparameters.get("optimizer", "AdamW")
-    loss_name = hyperparameters.get("loss", "CrossEntropyLoss")
-    max_grad_norm = hyperparameters.get("max_grad_norm", 1.0)
-    scheduler_name = hyperparameters.get("scheduler", "cosine")
+    batch_size = hyperparameters.get("batch_size", 8)
+    chip_size = hyperparameters.get("chip_size", 640)
+    learning_rate = hyperparameters.get("learning_rate", 0.01)
     freeze_encoder = hyperparameters.get("freeze_encoder", True)
-    seed = split_info["seed"]
 
-    with mlflow_training_context(hyperparameters, model_name, base_model_id, dataset_id):
-        import torch
+    yolo_dir = Path(split_info["_yolo_dir"])
+    if not (yolo_dir / "data.yaml").exists():
+        val_ratio = split_info["val_ratio"]
+        chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+        yolo_dir, _, _ = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio)
 
-        device = _get_device()
-        model = unet(weights=None, classes=num_classes)
-        local_path = _download_checkpoint(base_model_weights)
-        state = torch.load(local_path, map_location=device, weights_only=True)
-        model.load_state_dict(state, strict=False)
-        model.to(device)
-        if freeze_encoder:
-            encoder = getattr(model, "encoder", None)
-            if encoder is not None:
-                for param in encoder.parameters():
-                    param.requires_grad = False
-        train_loader = _build_dataset(
-            dataset_chips,
-            dataset_labels,
-            chip_size,
-            length=samples_per_epoch,
-            batch_size=batch_size,
-            split="train",
-            seed=seed,
-            sample_fraction=sample_fraction,
+    device = _get_device()
+
+    from ultralytics import settings as yolo_settings
+
+    yolo_settings.update({"mlflow": False})
+
+    local_weights = _download_checkpoint(base_model_weights)
+
+    with mlflow_training_context(
+        hyperparameters,
+        model_name,
+        base_model_id,
+        dataset_id,
+    ):
+        model = YOLO(str(local_weights))
+        results = model.train(
+            data=str(yolo_dir / "data.yaml"),
+            epochs=epochs,
+            batch=batch_size,
+            imgsz=chip_size,
+            device=device,
+            lr0=learning_rate,
+            freeze=10 if freeze_encoder else 0,
+            cos_lr=True,
+            verbose=False,
         )
-        val_loader = _build_dataset(
-            dataset_chips,
-            dataset_labels,
-            chip_size,
-            length=samples_per_epoch,
-            batch_size=batch_size,
-            split="val",
-            seed=seed,
-            sample_fraction=sample_fraction,
-        )
+        if results and hasattr(results, "results_dict"):
+            log_metadata(metadata={"loss": results.results_dict.get("train/box_loss", 0.0), "epoch": epochs})
 
-        losses = _get_losses()
-        optimizers = _get_optimizers()
-        criterion = losses[loss_name]()
-        trainable = filter(lambda p: p.requires_grad, model.parameters())
-        opt = optimizers[optimizer_name](trainable, lr=learning_rate, weight_decay=weight_decay)
+        _log_yolo_loss_history(model)
 
-        import torch
-
-        scheduler = None
-        if scheduler_name == "cosine":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
-
-        train_losses: list[float] = []
-        val_losses: list[float] = []
-
-        model.train()
-        for epoch in range(epochs):
-            total_loss = 0.0
-            for batch in train_loader:
-                total_loss += _train_step(model, batch, criterion, opt, device, max_grad_norm)
-            if scheduler:
-                scheduler.step()
-            avg_train_loss = total_loss / len(train_loader)
-
-            model.eval()
-            val_total = 0.0
-            with torch.no_grad():
-                for batch in val_loader:
-                    images, masks = preprocess(batch)
-                    images, masks = images.to(device), masks.to(device)
-                    val_total += criterion(model(images), masks).item()
-            avg_val_loss = val_total / max(len(val_loader), 1)
-            model.train()
-
-            train_losses.append(avg_train_loss)
-            val_losses.append(avg_val_loss)
-
-            import mlflow
-
-            mlflow.log_metric("train_loss", avg_train_loss, step=epoch)  # ty: ignore[possibly-missing-attribute]
-            mlflow.log_metric("val_loss", avg_val_loss, step=epoch)  # ty: ignore[possibly-missing-attribute]
-            log_metadata(metadata={"loss": avg_train_loss, "epoch": epoch + 1})
-            msg = f"epoch {epoch + 1}/{epochs}  train_loss={avg_train_loss:.4f}  val_loss={avg_val_loss:.4f}"
-            print(msg, flush=True)
-
-        from fair.zenml.metrics import log_loss_history
-
-        log_loss_history(train_losses, val_losses)
-
-    return model.cpu()
+    saved_path = Path(tempfile.mkdtemp()) / "best.pt"
+    model.save(str(saved_path))
+    return saved_path.read_bytes()
 
 
 @step
@@ -372,52 +520,46 @@ def evaluate_model(
     dataset_labels: str,
     hyperparameters: dict[str, Any],
     split_info: dict[str, Any],
-    num_classes: int = 2,
     class_names: list[str] | None = None,
 ) -> Annotated[dict[str, Any], "metrics"]:
-    import torch
+    chip_size = hyperparameters.get("chip_size", 640)
 
-    chip_size = hyperparameters.get("chip_size", 256)
-    sample_fraction = hyperparameters.get("sample_fraction", 1.0)
+    yolo_dir = Path(split_info["_yolo_dir"])
+    if not (yolo_dir / "data.yaml").exists():
+        val_ratio = split_info["val_ratio"]
+        chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+        yolo_dir, _, _ = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio)
 
-    device = _get_device()
-    model = trained_model.to(device)
-    model.eval()
+    model = _restore_checkpoint(trained_model)
+    results = model.val(data=str(yolo_dir / "data.yaml"), imgsz=chip_size, verbose=False)
 
-    loader = _build_dataset(
-        dataset_chips,
-        dataset_labels,
-        chip_size,
-        length=0,
-        split="val",
-        seed=split_info["seed"],
-        sample_fraction=sample_fraction,
-    )
-    total_correct = total_pixels = 0
-    intersection = [0] * num_classes
-    union = [0] * num_classes
+    if not hasattr(results, "results_dict") or not results.results_dict:
+        msg = "YOLO validation produced no results"
+        raise RuntimeError(msg)
 
-    with torch.no_grad():
-        for batch in loader:
-            images, masks = preprocess(batch)
-            images, masks = images.to(device), masks.to(device)
-            preds = model(images).argmax(dim=1)
-            total_correct += (preds == masks).sum().item()
-            total_pixels += masks.numel()
-            for c in range(num_classes):
-                intersection[c] += ((preds == c) & (masks == c)).sum().item()
-                union[c] += ((preds == c) | (masks == c)).sum().item()
+    metrics_dict: dict[str, Any] = {
+        "accuracy": results.results_dict.get("metrics/mAP50(B)", 0.0),
+        "mean_iou": results.results_dict.get("metrics/mAP50-95(B)", 0.0),
+        "precision": results.results_dict.get("metrics/precision(B)", 0.0),
+        "recall": results.results_dict.get("metrics/recall(B)", 0.0),
+    }
+    log_evaluation_results(metrics_dict)
+    return metrics_dict
 
-    resolved_names = (
-        class_names if class_names and len(class_names) == num_classes else [str(c) for c in range(num_classes)]
-    )
-    per_class_iou = {resolved_names[c]: intersection[c] / max(union[c], 1) for c in range(num_classes)}
 
-    accuracy = total_correct / max(total_pixels, 1)
-    mean_iou = sum(per_class_iou.values()) / num_classes
-    metrics = {"accuracy": accuracy, "mean_iou": mean_iou, "per_class_iou": per_class_iou}
-    log_evaluation_results(metrics)
-    return metrics
+@step(output_materializers={"onnx_model": ONNXMaterializer})
+def export_onnx(trained_model: Any) -> Annotated[bytes, "onnx_model"]:
+    import onnx
+
+    model = _restore_checkpoint(trained_model)
+    onnx_path = model.export(format="onnx")
+    proto = onnx.load(onnx_path)
+    onnx.save_model(proto, onnx_path, save_as_external_data=False)
+    onnx.checker.check_model(onnx_path)
+    try:
+        return Path(onnx_path).read_bytes()
+    finally:
+        Path(onnx_path).unlink(missing_ok=True)
 
 
 @step
@@ -430,43 +572,6 @@ def run_inference(
 
     session = load_session(model_uri)
     return predict(session, input_images, inference_params)
-
-
-@step(output_materializers={"onnx_model": ONNXMaterializer})
-def export_onnx(
-    trained_model: Any,
-    hyperparameters: dict[str, Any],
-    num_classes: int = 2,
-) -> Annotated[bytes, "onnx_model"]:
-    import os
-    import tempfile
-
-    import onnx
-    import torch
-
-    chip_size = hyperparameters.get("chip_size", 256)
-
-    model = trained_model.cpu()
-    model.eval()
-    dummy = torch.randn(1, 3, chip_size, chip_size)
-    fd, path = tempfile.mkstemp(suffix=".onnx")
-    os.close(fd)
-    try:
-        torch.onnx.export(
-            model,
-            (dummy,),
-            path,
-            input_names=["input"],
-            output_names=["output"],
-            dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
-            opset_version=18,
-        )
-        proto = onnx.load(path)
-        onnx.save_model(proto, path, save_as_external_data=False)
-        onnx.checker.check_model(path)
-        return Path(path).read_bytes()
-    finally:
-        Path(path).unlink(missing_ok=True)
 
 
 @pipeline
@@ -496,13 +601,8 @@ def training_pipeline(
         dataset_labels=dataset_labels,
         hyperparameters=hyperparameters,
         split_info=split_info,
-        num_classes=num_classes,
     )
-    export_onnx(
-        trained_model=trained_model,
-        hyperparameters=hyperparameters,
-        num_classes=num_classes,
-    )
+    export_onnx(trained_model=trained_model)
 
 
 @pipeline
