@@ -23,7 +23,7 @@ def _subset_chips_dir(chips_path: str, fraction: float) -> str:
 
     chips = sorted(resolve_directory(chips_path).rglob("OAM-*.tif"))
     step = max(1, round(1 / fraction))
-    subset = Path(tempfile.mkdtemp(prefix="unet_chips_subset_"))
+    subset = Path(tempfile.mkdtemp(prefix="yolo11xcls_chips_subset_"))
     for chip in chips[::step]:
         (subset / chip.name).symlink_to(chip)
         sidecar = chip.with_name(chip.name + ".aux.xml")
