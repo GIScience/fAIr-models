@@ -35,7 +35,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-COPY models/unet_segmentation models/unet_segmentation
+COPY models/yolo11xcls_waste_grid_segmentation models/yolo11xcls_waste_grid_segmentation
 COPY models/conftest.py models/conftest.py
 COPY models/test_integration.py models/test_integration.py
 
@@ -64,7 +64,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     pyproj \
     numpy \
     Pillow
-COPY models/unet_segmentation/pipeline.py /app/models/unet_segmentation/pipeline.py
+COPY models/yolo11xcls_waste_grid_segmentation/pipeline.py /app/models/yolo11xcls_waste_grid_segmentation/pipeline.py
 
 # Inference stage: distroless runtime for live serving
 FROM gcr.io/distroless/python3-debian12:nonroot AS inference
