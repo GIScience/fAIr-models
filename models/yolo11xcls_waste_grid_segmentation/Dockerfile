@@ -3,7 +3,7 @@ FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS builder
 ENV UV_SYSTEM_PYTHON=1 UV_LINK_MODE=copy
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libgdal-dev libgl1 libglib2.0-0 \
+    build-essential libgdal-dev gdal-bin libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md fair_zenml_patch.pth /tmp/fair-src/
@@ -27,7 +27,7 @@ FROM python:3.13-slim-trixie AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libexpat1 libgdal36 libgl1 libglib2.0-0 \
+    libexpat1 libgdal36 gdal-bin libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
