@@ -1,12 +1,4 @@
-"""ZenML pipeline for YOLOv11n building detection.
-
-Entrypoints referenced by models/yolo11n_detection/stac-item.json.
-Pretrained backbone: Ultralytics YOLOv11n COCO.
-"""
-
 import hashlib
-import json
-import random
 import shutil
 import tempfile
 from pathlib import Path
@@ -17,8 +9,10 @@ from zenml import log_metadata, pipeline, step
 from fair.zenml.instrumentation import log_evaluation_results, mlflow_training_context
 from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializer
 
-MODEL_INPUT_SIZE = 640
-CHIP_SIZE = 256
+MODEL_INPUT_SIZE = 228
+CELL_SIZE_M = 5.0
+CLASS_NAMES = ("no_waste", "waste")
+CHIP_SIZE = 640
 
 
 def _get_device() -> str:
@@ -34,6 +28,7 @@ def _get_device() -> str:
 def _download_checkpoint(url: str) -> Path:
     from upath import UPath
 
+    print(url)
     local_path = Path(tempfile.mkdtemp()) / UPath(url).name
     local_path.write_bytes(UPath(url).read_bytes())
     return local_path
@@ -70,30 +65,6 @@ def _log_yolo_loss_history(model: Any) -> None:
             mlflow.log_metric("train_loss", tl, step=epoch)  # ty: ignore[possibly-missing-attribute]
             mlflow.log_metric("val_loss", vl, step=epoch)  # ty: ignore[possibly-missing-attribute]
         log_loss_history(train_losses, val_losses)
-
-
-def _pixel_bbox_to_geo_feature(bbox_xyxy, transform, crs, properties):
-    from pyproj import Transformer
-
-    x1, y1, x2, y2 = bbox_xyxy
-    corners_pixel = [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
-    corners_crs = [transform * (col, row) for col, row in corners_pixel]
-
-    if crs is not None and str(crs) != "EPSG:4326":
-        t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-        corners_geo = [list(t.transform(cx, cy)) for cx, cy in corners_crs]
-    else:
-        corners_geo = [list(c) for c in corners_crs]
-
-    return {
-        "type": "Feature",
-        "properties": properties,
-        "geometry": {"type": "Polygon", "coordinates": [corners_geo]},
-    }
-
-
-def _build_feature_collection(features):
-    return {"type": "FeatureCollection", "features": features}
 
 
 def _restore_checkpoint(trained_model: Any):
@@ -264,9 +235,9 @@ def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str
     return _build_feature_collection(features)
 
 
-def _dataset_cache_dir(chips_path: str, labels_path: str) -> Path:
-    key = hashlib.sha256(f"{chips_path}|{labels_path}".encode()).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"yolo_dataset_{key}"
+def dataset_cache_dir(chips_path: str, labels_path: str, threshold: float, cell_size_m: float) -> Path:
+    key = hashlib.sha256(f"{chips_path}|{labels_path}|{threshold}|{cell_size_m}".encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"yolo_cls_dataset_{key}"
 
 
 def _subset_chips_dir(chips_path: str, fraction: float) -> str:
@@ -284,145 +255,162 @@ def _subset_chips_dir(chips_path: str, fraction: float) -> str:
     return str(subset)
 
 
-def _coco_from_geojson_and_chips(chips_dir: Path, geojson_path: Path) -> dict[str, Any]:
-    """Build COCO-style detection labels from a GeoJSON polygon FeatureCollection."""
-    import rasterio
-    from rasterio.transform import rowcol
-    from shapely.geometry import box, shape
+def pick_utm_crs(lon: float, lat: float):
+    from rasterio.crs import CRS
 
-    with open(geojson_path, encoding="utf-8") as f:
-        data = json.load(f)
-    polygons = [shape(feat["geometry"]) for feat in data.get("features", [])]
+    zone = int((lon + 180) // 6) + 1
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    return CRS.from_epsg(epsg)
 
-    chips = sorted(chips_dir.rglob("*.tif"))
-    if not chips:
-        msg = f"No .tif chips found under {chips_dir}"
+
+def build_mosaic(chip_paths: list[Path]) -> Path:
+    import subprocess
+
+    out_dir = Path(tempfile.mkdtemp(prefix="yolo_cls_mosaic_"))
+    vrt_path = out_dir / "mosaic.vrt"
+    filelist = out_dir / "chips.txt"
+    filelist.write_text("\n".join(str(p) for p in chip_paths))
+    subprocess.run(
+        ["gdalbuildvrt", "-input_file_list", str(filelist), str(vrt_path)],
+        check=True,
+        capture_output=True,
+    )
+    return vrt_path
+
+
+def load_labels_merged(labels_dir: Path, target_crs):
+    import geopandas as gpd
+    import pandas as pd
+
+    files = sorted(labels_dir.rglob("*.geojson"))
+    if not files:
+        msg = f"No .geojson files under {labels_dir}"
         raise FileNotFoundError(msg)
-
-    images: list[dict[str, Any]] = []
-    annotations: list[dict[str, Any]] = []
-    annotation_id = 1
-    for image_id, chip in enumerate(chips, start=1):
-        with rasterio.open(chip) as src:
-            chip_box = box(*src.bounds)
-            transform = src.transform
-            width, height = src.width, src.height
-        images.append({"id": image_id, "file_name": chip.name, "width": width, "height": height})
-        for poly in polygons:
-            if not poly.intersects(chip_box):
-                continue
-            clipped = poly.intersection(chip_box)
-            if clipped.is_empty:
-                continue
-            minx, miny, maxx, maxy = clipped.bounds
-            row_min, col_min = rowcol(transform, minx, maxy)
-            row_max, col_max = rowcol(transform, maxx, miny)
-            x = max(0, int(col_min))
-            y = max(0, int(row_min))
-            x2 = min(width, int(col_max))
-            y2 = min(height, int(row_max))
-            w = x2 - x
-            h = y2 - y
-            if w <= 0 or h <= 0:
-                continue
-            annotations.append(
-                {
-                    "id": annotation_id,
-                    "image_id": image_id,
-                    "category_id": 0,
-                    "bbox": [float(x), float(y), float(w), float(h)],
-                    "area": float(w * h),
-                    "iscrowd": 0,
-                }
-            )
-            annotation_id += 1
-    return {
-        "images": images,
-        "annotations": annotations,
-        "categories": [{"id": 0, "name": "building"}],
-    }
+    frames = [gpd.read_file(f) for f in files]
+    src_crs = next((f.crs for f in frames if f.crs is not None), "EPSG:4326")
+    combined = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=src_crs)
+    combined = combined.to_crs(target_crs)
+    return combined.geometry.union_all()
 
 
-def _resolve_coco_labels(labels_path: str, chips_dir: Path) -> Path:
-    """Resolve the dataset's labels asset into a local COCO JSON file path."""
-    from fair.utils.data import resolve_directory, resolve_path
+def build_grid_gdf(bounds_proj, cell_size: float, crs):
+    import geopandas as gpd
+    from shapely.geometry import box
 
-    if labels_path.endswith(".json"):
-        return resolve_path(labels_path)
+    minx, miny, maxx, maxy = bounds_proj
+    minx = (minx // cell_size) * cell_size
+    miny = (miny // cell_size) * cell_size
+    cols = max(1, int((maxx - minx) // cell_size) + 1)
+    rows = max(1, int((maxy - miny) // cell_size) + 1)
 
-    local_labels_dir = resolve_directory(labels_path, "*.geojson")
-    geojson_files = sorted(local_labels_dir.rglob("*.geojson"))
-    if not geojson_files:
-        msg = f"No .geojson files found under {labels_path}"
-        raise FileNotFoundError(msg)
+    cells = []
+    cell_id = 0
+    for r in range(rows):
+        for c in range(cols):
+            x = minx + c * cell_size
+            y = miny + r * cell_size
+            cells.append({"cell_id": cell_id, "geometry": box(x, y, x + cell_size, y + cell_size)})
+            cell_id += 1
+    return gpd.GeoDataFrame(cells, crs=crs)
 
-    coco = _coco_from_geojson_and_chips(chips_dir, geojson_files[0])
-    coco_path = local_labels_dir / "_yolo_detection_labels.json"
-    coco_path.write_text(json.dumps(coco))
-    return coco_path
+
+def classify_cells(grid_gdf, labels_union, threshold: float):
+    grid_gdf = grid_gdf.copy()
+    intersections = grid_gdf.geometry.intersection(labels_union)
+    grid_gdf["overlap_fraction"] = (intersections.area / grid_gdf.geometry.area).fillna(0.0)
+    grid_gdf["label"] = (grid_gdf["overlap_fraction"] >= threshold).astype(int)
+    return grid_gdf
 
 
-def _prepare_yolo_dataset(
+def read_cell_array_from_mosaic(mosaic_ds, cell_geom, utm_to_mosaic, nodata) -> Any:
+    from rasterio.windows import from_bounds
+
+    minx, miny, maxx, maxy = cell_geom.bounds
+    xs = [minx, minx, maxx, maxx]
+    ys = [miny, maxy, miny, maxy]
+    lons, lats = utm_to_mosaic.transform(xs, ys)
+    west, east = min(lons), max(lons)
+    south, north = min(lats), max(lats)
+
+    window = from_bounds(west, south, east, north, transform=mosaic_ds.transform)
+
+    arr = mosaic_ds.read(
+        [1, 2, 3],
+        window=window,
+        boundless=True,
+        fill_value=0,
+        out_dtype="uint8",
+    )
+    if arr.size == 0:
+        return None
+
+    # ToDO check for NoData
+    if nodata is not None:
+        mask = (arr == nodata).all(axis=0)
+        if mask.mean() > 0.8:  # min covered area, same as min threshold as for waste intersetcion maybe?
+            return None
+    return arr
+
+
+def save_arr_as_png(arr, out_path: Path) -> None:
+    ...
+
+
+def _prepare_yolo_classification_dataset(
     chips_path: str,
     labels_path: str,
-    chip_size: int,
+    waste_overlap_threshold: float,
+    cell_size_m: float = CELL_SIZE_M,
     val_ratio: float = 0.2,
     seed: int = 42,
-) -> tuple[Path, int, int]:
+) -> tuple[Path, dict[str, int], dict[str, int]]:
+    import rasterio
+    from pyproj import Transformer
+
     from fair.utils.data import resolve_directory
 
-    yolo_dir = _dataset_cache_dir(chips_path, labels_path)
-    if (yolo_dir / "data.yaml").exists():
-        train_count = len(list((yolo_dir / "images" / "train").iterdir()))
-        val_count = len(list((yolo_dir / "images" / "val").iterdir()))
-        return yolo_dir, train_count, val_count
+    yolo_dir = dataset_cache_dir(chips_path, labels_path, waste_overlap_threshold, cell_size_m)
 
     local_chips = resolve_directory(chips_path)
-    local_json = _resolve_coco_labels(labels_path, local_chips)
+    chip_paths = sorted(local_chips.rglob("*.tif"))
 
-    with open(local_json, encoding="utf-8") as f:
-        coco = json.load(f)
+    if not chip_paths:
+        msg = f"No chips under {chips_path}"
+        raise FileNotFoundError(msg)
 
-    img_id_to_name = {img["id"]: img["file_name"] for img in coco["images"]}
-    img_id_to_size = {img["id"]: (img["width"], img["height"]) for img in coco["images"]}
-    annotations_by_image: dict[int, list[dict[str, Any]]] = {}
-    for ann in coco["annotations"]:
-        annotations_by_image.setdefault(ann["image_id"], []).append(ann)
+    labels_dir = resolve_directory(labels_path, "*.geojson")
+
+    mosaic_path = build_mosaic(chip_paths)
 
     if yolo_dir.exists():
         shutil.rmtree(yolo_dir)
+
     for split in ("train", "val"):
-        (yolo_dir / "images" / split).mkdir(parents=True)
-        (yolo_dir / "labels" / split).mkdir(parents=True)
+        for cls in CLASS_NAMES:
+            (yolo_dir / split / cls).mkdir(parents=True)
 
-    available_ids = [img_id for img_id, fn in img_id_to_name.items() if (local_chips / fn).exists()]
-    rng = random.Random(seed)
-    rng.shuffle(available_ids)
-    val_count = max(1, int(len(available_ids) * val_ratio))
-    val_ids = set(available_ids[-val_count:])
+    with rasterio.open(mosaic_path) as mosaic:
+        mosaic_crs = mosaic.crs
 
-    for img_id in available_ids:
-        filename = img_id_to_name[img_id]
-        split = "val" if img_id in val_ids else "train"
-        shutil.copy2(local_chips / filename, yolo_dir / "images" / split / filename)
+        bounds = mosaic.bounds
+        nodata = mosaic.nodata
 
-        w, h = img_id_to_size[img_id]
-        label_file = yolo_dir / "labels" / split / Path(filename).with_suffix(".txt").name
-        lines = []
-        for ann in annotations_by_image.get(img_id, []):
-            bx, by, bw, bh = ann["bbox"]
-            cx = (bx + bw / 2) / w
-            cy = (by + bh / 2) / h
-            nw = bw / w
-            nh = bh / h
-            lines.append(f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
-        label_file.write_text("\n".join(lines))
+        centroid_lon = (bounds.left + bounds.right) / 2
+        centroid_lat = (bounds.bottom + bounds.top) / 2
+        target_crs = pick_utm_crs(centroid_lon, centroid_lat) if mosaic_crs.is_geographic else mosaic_crs
 
-    data_yaml = yolo_dir / "data.yaml"
-    data_yaml.write_text(f"path: {yolo_dir}\ntrain: images/train\nval: images/val\nnc: 1\nnames: ['building']\n")
+        to_proj = Transformer.from_crs(mosaic_crs, target_crs, always_xy=True)
+        xs = [bounds.left, bounds.left, bounds.right, bounds.right]
+        ys = [bounds.bottom, bounds.top, bounds.bottom, bounds.top]
+        px, py = to_proj.transform(xs, ys)
+        bounds_proj = (min(px), min(py), max(px), max(py))
 
-    train_count = len(available_ids) - val_count
-    return yolo_dir, train_count, val_count
+        grid = build_grid_gdf(bounds_proj, cell_size_m, target_crs)
+        labels_union = load_labels_merged(labels_dir, target_crs)
+        grid = classify_cells(grid, labels_union, waste_overlap_threshold)
+
+        # todo build classication from grid cells
+    return yolo_dir
 
 
 @step
@@ -432,19 +420,38 @@ def split_dataset(
     hyperparameters: dict[str, Any],
 ) -> Annotated[dict[str, Any], "split_info_artifact"]:
     val_ratio = hyperparameters.get("val_ratio", 0.2)
-    chip_size = hyperparameters.get("chip_size", 640)
     seed = hyperparameters.get("split_seed", 42)
+    waste_overlap_threshold = hyperparameters.get("waste_overlap_threshold", 0.8)
+    cell_size_m = hyperparameters.get("cell_size_m", CELL_SIZE_M)
 
     chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-    yolo_dir, train_count, val_count = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio, seed)
+    yolo_dir, train_counts, val_counts = _prepare_yolo_classification_dataset(
+        chips_path,
+        dataset_labels,
+        waste_overlap_threshold=waste_overlap_threshold,
+        cell_size_m=cell_size_m,
+        val_ratio=val_ratio,
+        seed=seed,
+    )
 
+    train_count = sum(train_counts.values())
+    val_count = sum(val_counts.values())
     split_info = {
-        "strategy": "random",
+        "strategy": "grid_5m_stratified_random",
         "val_ratio": val_ratio,
         "seed": seed,
         "train_count": train_count,
         "val_count": val_count,
-        "description": f"Seeded random shuffle of image IDs, last {val_ratio:.0%} held out for validation",
+        "train_counts_per_class": train_counts,
+        "val_counts_per_class": val_counts,
+        "waste_overlap_threshold": waste_overlap_threshold,
+        "cell_size_m": cell_size_m,
+        "class_names": list(CLASS_NAMES),
+        "description": (
+            f"5 m x 5 m grid over the chip mosaic; cells with >= "
+            f"{waste_overlap_threshold:.0%} label coverage are 'waste', "
+            f"else 'no_waste'. Stratified random split holds out {val_ratio:.0%} per class."
+        ),
         "_yolo_dir": str(yolo_dir),
     }
     log_metadata(metadata={"fair/split": {k: v for k, v in split_info.items() if not k.startswith("_")}})
@@ -458,12 +465,13 @@ def train_model(
     base_model_weights: str,
     hyperparameters: dict[str, Any],
     split_info: dict[str, Any],
-    num_classes: int = 1,
+    num_classes: int = 2,
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
 ) -> Annotated[Any, "trained_model_artifact"]:
     from ultralytics import YOLO
+    from ultralytics import settings as yolo_settings
 
     epochs = hyperparameters["epochs"]
     batch_size = hyperparameters.get("batch_size", 8)
@@ -475,15 +483,18 @@ def train_model(
     if not (yolo_dir / "data.yaml").exists():
         val_ratio = split_info["val_ratio"]
         chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-        yolo_dir, _, _ = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio)
-
-    device = _get_device()
-
-    from ultralytics import settings as yolo_settings
+        yolo_dir, _, _ = _prepare_yolo_classification_dataset(
+            chips_path,
+            dataset_labels,
+            waste_overlap_threshold=split_info.get("waste_overlap_threshold", 0.8),
+            cell_size_m=split_info.get("cell_size_m", CELL_SIZE_M),
+            val_ratio=split_info["val_ratio"],
+            seed=split_info.get("seed", 42),
+        )
 
     yolo_settings.update({"mlflow": False})
-
     local_weights = _download_checkpoint(base_model_weights)
+    device = _get_device()
 
     with mlflow_training_context(
         hyperparameters,
@@ -491,9 +502,9 @@ def train_model(
         base_model_id,
         dataset_id,
     ):
-        model = YOLO(str(local_weights))
+        model = YOLO(str(local_weights), task="classify")
         results = model.train(
-            data=str(yolo_dir / "data.yaml"),
+            data=str(yolo_dir),
             epochs=epochs,
             batch=batch_size,
             imgsz=chip_size,
