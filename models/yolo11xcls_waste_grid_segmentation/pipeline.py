@@ -1,4 +1,5 @@
 import hashlib
+import random
 import shutil
 import tempfile
 from pathlib import Path
@@ -9,10 +10,10 @@ from zenml import log_metadata, pipeline, step
 from fair.zenml.instrumentation import log_evaluation_results, mlflow_training_context
 from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializer
 
-MODEL_INPUT_SIZE = 228
+MODEL_INPUT_SIZE = 128
 CELL_SIZE_M = 5.0
-CLASS_NAMES = ("no_waste", "waste")
-CHIP_SIZE = 640
+CLASS_NAMES = ("background", "waste")
+CHIP_SIZE = MODEL_INPUT_SIZE
 
 
 def _get_device() -> str:
@@ -52,8 +53,8 @@ def _log_yolo_loss_history(model: Any) -> None:
         reader = csv.DictReader(f)
         for row in reader:
             stripped = {k.strip(): v.strip() for k, v in row.items()}
-            train_loss = stripped.get("train/box_loss")
-            val_loss = stripped.get("val/box_loss")
+            train_loss = stripped.get("train/loss")
+            val_loss = stripped.get("val/loss")
             if train_loss is not None and val_loss is not None:
                 train_losses.append(float(train_loss))
                 val_losses.append(float(val_loss))
@@ -352,8 +353,12 @@ def read_cell_array_from_mosaic(mosaic_ds, cell_geom, utm_to_mosaic, nodata) -> 
     return arr
 
 
-def save_arr_as_png(arr, out_path: Path) -> None:
-    ...
+def save_arr_as_png(arr: Any, out_path: Path) -> None:
+    import numpy as np
+    from PIL import Image
+
+    rgb = np.transpose(arr, (1, 2, 0)).astype(np.uint8)
+    Image.fromarray(rgb, mode="RGB").save(out_path, format="PNG")
 
 
 def _prepare_yolo_classification_dataset(
@@ -373,7 +378,6 @@ def _prepare_yolo_classification_dataset(
 
     local_chips = resolve_directory(chips_path)
     chip_paths = sorted(local_chips.rglob("*.tif"))
-
     if not chip_paths:
         msg = f"No chips under {chips_path}"
         raise FileNotFoundError(msg)
@@ -384,14 +388,15 @@ def _prepare_yolo_classification_dataset(
 
     if yolo_dir.exists():
         shutil.rmtree(yolo_dir)
-
     for split in ("train", "val"):
         for cls in CLASS_NAMES:
             (yolo_dir / split / cls).mkdir(parents=True)
 
+    train_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
+    val_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
+
     with rasterio.open(mosaic_path) as mosaic:
         mosaic_crs = mosaic.crs
-
         bounds = mosaic.bounds
         nodata = mosaic.nodata
 
@@ -409,8 +414,34 @@ def _prepare_yolo_classification_dataset(
         labels_union = load_labels_merged(labels_dir, target_crs)
         grid = classify_cells(grid, labels_union, waste_overlap_threshold)
 
-        # todo build classication from grid cells
-    return yolo_dir
+        utm_to_mosaic = Transformer.from_crs(target_crs, mosaic_crs, always_xy=True)
+        rng = random.Random(seed)
+
+        for label_value, cls_name in enumerate(CLASS_NAMES):
+            class_cells = grid[grid["label"] == label_value]
+            cell_ids = list(class_cells.index)
+            rng.shuffle(cell_ids)
+            n_val = int(round(len(cell_ids) * val_ratio)) if cell_ids else 0
+            val_set = set(cell_ids[:n_val])
+
+            for idx in cell_ids:
+                arr = read_cell_array_from_mosaic(
+                    mosaic,
+                    grid.loc[idx, "geometry"],
+                    utm_to_mosaic,
+                    nodata,
+                )
+                if arr is None or arr.size == 0:
+                    continue
+                split = "val" if idx in val_set else "train"
+                out_path = yolo_dir / split / cls_name / f"cell_{int(grid.loc[idx, 'cell_id']):08d}.png"
+                save_arr_as_png(arr, out_path)
+                if split == "val":
+                    val_counts[cls_name] += 1
+                else:
+                    train_counts[cls_name] += 1
+
+    return yolo_dir, train_counts, val_counts
 
 
 @step
@@ -450,7 +481,7 @@ def split_dataset(
         "description": (
             f"5 m x 5 m grid over the chip mosaic; cells with >= "
             f"{waste_overlap_threshold:.0%} label coverage are 'waste', "
-            f"else 'no_waste'. Stratified random split holds out {val_ratio:.0%} per class."
+            f"else 'background'. Stratified random split holds out {val_ratio:.0%} per class."
         ),
         "_yolo_dir": str(yolo_dir),
     }
@@ -475,13 +506,14 @@ def train_model(
 
     epochs = hyperparameters["epochs"]
     batch_size = hyperparameters.get("batch_size", 8)
-    chip_size = hyperparameters.get("chip_size", 640)
+    chip_size = hyperparameters.get("chip_size", MODEL_INPUT_SIZE)
     learning_rate = hyperparameters.get("learning_rate", 0.01)
     freeze_encoder = hyperparameters.get("freeze_encoder", True)
 
     yolo_dir = Path(split_info["_yolo_dir"])
-    if not (yolo_dir / "data.yaml").exists():
-        val_ratio = split_info["val_ratio"]
+    if not yolo_dir.exists() or not all(
+        (yolo_dir / split / cls).exists() for split in ("train", "val") for cls in CLASS_NAMES
+    ):
         chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
         yolo_dir, _, _ = _prepare_yolo_classification_dataset(
             chips_path,
@@ -515,7 +547,8 @@ def train_model(
             verbose=False,
         )
         if results and hasattr(results, "results_dict"):
-            log_metadata(metadata={"loss": results.results_dict.get("train/box_loss", 0.0), "epoch": epochs})
+            top1 = results.results_dict.get("metrics/accuracy_top1", 0.0)
+            log_metadata(metadata={"accuracy_top1": float(top1), "epoch": epochs})
 
         _log_yolo_loss_history(model)
 
@@ -533,26 +566,31 @@ def evaluate_model(
     split_info: dict[str, Any],
     class_names: list[str] | None = None,
 ) -> Annotated[dict[str, Any], "metrics"]:
-    chip_size = hyperparameters.get("chip_size", 640)
+    chip_size = hyperparameters.get("chip_size", MODEL_INPUT_SIZE)
 
     yolo_dir = Path(split_info["_yolo_dir"])
-    if not (yolo_dir / "data.yaml").exists():
-        val_ratio = split_info["val_ratio"]
+    if not yolo_dir.exists() or not all(
+        (yolo_dir / split / cls).exists() for split in ("train", "val") for cls in CLASS_NAMES
+    ):
         chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-        yolo_dir, _, _ = _prepare_yolo_dataset(chips_path, dataset_labels, chip_size, val_ratio)
+        yolo_dir, _, _ = _prepare_yolo_classification_dataset(
+            chips_path,
+            dataset_labels,
+            waste_overlap_threshold=split_info.get("waste_overlap_threshold", 0.8),
+            cell_size_m=split_info.get("cell_size_m", CELL_SIZE_M),
+            val_ratio=split_info["val_ratio"],
+            seed=split_info.get("seed", 42),
+        )
 
     model = _restore_checkpoint(trained_model)
-    results = model.val(data=str(yolo_dir / "data.yaml"), imgsz=chip_size, verbose=False)
+    results = model.val(data=str(yolo_dir), imgsz=chip_size, verbose=False)
 
     if not hasattr(results, "results_dict") or not results.results_dict:
         msg = "YOLO validation produced no results"
         raise RuntimeError(msg)
 
     metrics_dict: dict[str, Any] = {
-        "accuracy": results.results_dict.get("metrics/mAP50(B)", 0.0),
-        "mean_iou": results.results_dict.get("metrics/mAP50-95(B)", 0.0),
-        "precision": results.results_dict.get("metrics/precision(B)", 0.0),
-        "recall": results.results_dict.get("metrics/recall(B)", 0.0),
+        "accuracy": float(results.results_dict.get("metrics/accuracy_top1", 0.0)),
     }
     log_evaluation_results(metrics_dict)
     return metrics_dict

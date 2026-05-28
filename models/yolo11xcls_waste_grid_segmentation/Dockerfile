@@ -17,6 +17,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     "ultralytics>=8.4.0" \
     rasterio \
     pyproj \
+    geopandas \
+    shapely \
+    Pillow \
     onnx \
     onnxscript \
     /tmp/fair-src[k8s,serve]

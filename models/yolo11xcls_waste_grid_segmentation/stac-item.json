@@ -52,7 +52,7 @@
     "mlm:name": "yolo11xcls-waste-grid-segmentation",
     "mlm:architecture": "yolo11xcls",
     "mlm:tasks": [
-      "instance-segmentation"
+      "semantic-segmentation"
     ],
     "mlm:framework": "PyTorch",
     "mlm:framework_version": "2.10.0",
@@ -102,8 +102,8 @@
           "shape": [
             -1,
             3,
-            448,
-            448
+            128,
+            128
           ],
           "dim_order": [
             "batch",
@@ -121,35 +121,32 @@
     ],
     "mlm:output": [
       {
-        "name": "segmentation mask",
+        "name": "waste segmentation",
         "tasks": [
           "instance-segmentation"
         ],
         "result": {
           "shape": [
             -1,
-            2,
-            256,
-            256
+            2
           ],
           "dim_order": [
             "batch",
-            "channel",
-            "height",
-            "width"
+            "class"
           ],
           "data_type": "float32"
         },
+        "description": "Per-cell classication of the grid.",
         "classification:classes": [
           {
             "name": "background",
             "value": 0,
-            "description": "Background pixels"
+            "description": "Grid cell has less than waste_overlap_threshold coverage by supplied polygon labels"
           },
           {
-            "name": "building",
+            "name": "waste",
             "value": 1,
-            "description": "Building footprints"
+            "description": "Grid cell is covered by supplied polygon labels above waste_overlap_threshold"
           }
         ],
         "post_processing_function": {
@@ -172,14 +169,15 @@
       "training.scheduler": "cosine",
       "training.max_grad_norm": 1.0,
       "training.freeze_encoder": true,
-      "inference.min_class_value": 1,
+      "training.waste_overlap_threshold": 0.8,
+      "training.cell_size_m": 5.0,
       "inference.confidence_threshold": 0.5
     },
     "fair:split_spec": {
-      "strategy": "spatial",
+      "strategy": "grid_5m_stratified_random",
       "default_ratio": 0.2,
       "seed": 42,
-      "description": "Spatial split: RandomGeoSampler for train, GridGeoSampler for val (non-overlapping tiles)"
+      "description": "Mosaic chips, build 5 m x 5 m grid, classify each cell as waste/no_waste by label overlap, random hold-out"
     },
     "fair:hyperparameters_spec": [
       {
@@ -289,15 +287,23 @@
         "default": 0.5,
         "min": 0.0,
         "max": 1.0,
-        "description": "Minimum per-pixel softmax probability to retain a predicted class at inference"
+        "description": "Minimum softmax probability to retain a predicted class at inference"
       },
       {
-        "key": "min_class_value",
-        "type": "int",
-        "default": 1,
-        "min": 0,
-        "max": 255,
-        "description": "Minimum class index value to retain as a foreground prediction at inference"
+        "key": "waste_overlap_threshold",
+        "type": "float",
+        "default": 0.8,
+        "min": 0.0,
+        "max": 1.0,
+        "description": "Minimum fractional area of a grid cell covered by label polygons for the cell to be labeled 'waste'"
+      },
+      {
+        "key": "cell_size_m",
+        "type": "float",
+        "default": 5.0,
+        "min": 0.5,
+        "max": 100.0,
+        "description": "Edge length, in meters for the classication grid"
       },
       {
         "key": "sample_fraction",
