@@ -145,7 +145,7 @@
     },
     "assets": {
         "checkpoint": {
-            "href": "https://huggingface.co/kshitijrajsharma/dinov3-hot-buildings/resolve/main/dinov3l_upernet_hot.ckpt",
+            "href": "https://huggingface.co/kshitijrajsharma/dinov3-hot-buildings/resolve/main/dinov3s_upernet_hot.ckpt",
             "title": "Pretrained Lightning checkpoint (decoder fine-tuned on HOT VHR)",
             "type": "application/octet-stream; framework=pytorch",
             "roles": ["mlm:model", "mlm:weights"],
