@@ -5,15 +5,6 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-import onnx
-import torch
-from dinov3_hot.dataset import compute_dataset_stats, read_loss_history, spatial_split
-from dinov3_hot.evaluation import evaluate as eval_run
-from dinov3_hot.paths import download_checkpoint, resolve_labels_geojson
-from dinov3_hot.serve import HOT_MEAN, HOT_STD, MODEL_INPUT_SIZE, predict_session
-from dinov3_hot.tune import tune_postprocess_run
-from huggingface_hub import hf_hub_download
-from torch import nn
 from zenml import log_metadata, pipeline, step
 
 from fair.utils.data import resolve_directory
@@ -41,6 +32,8 @@ DEFAULT_INFERENCE_PARAMS: dict[str, Any] = {
 
 def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str, Any]:
     """Module-level predict for `fair.serve.base`. Delegates to `predict_session`."""
+    from dinov3_hot.serve import predict_session
+
     return predict_session(session, Path(resolve_directory(input_images)), params)
 
 
@@ -51,6 +44,8 @@ def split_dataset(
     hyperparameters: dict[str, Any],
 ) -> Annotated[dict[str, Any], "split_info"]:
     """Spatially-stratified val split + per-channel mean/std for normalisation."""
+    from dinov3_hot.dataset import compute_dataset_stats, spatial_split
+    from dinov3_hot.serve import HOT_MEAN, HOT_STD
 
     chips_dir = resolve_directory(dataset_chips, "*.tif")
     chip_names = sorted(p.name for p in chips_dir.glob("*.tif"))
@@ -99,8 +94,11 @@ def train_model(
 ) -> Annotated[Any, "trained_model_artifact"]:
     """Fine-tune the decoder via `dinov3_hot.finetune.finetune` on the train split."""
     from dinov3_hot.config import load_config
+    from dinov3_hot.dataset import read_loss_history
     from dinov3_hot.finetune import finetune
     from dinov3_hot.model import DinoV3HotLit
+    from dinov3_hot.paths import download_checkpoint, resolve_labels_geojson
+    from huggingface_hub import hf_hub_download
 
     cfg = load_config(None)
     cfg.backbone = BACKBONE_KEY
@@ -164,6 +162,8 @@ def evaluate_model(
     class_names: list[str] | None = None,
 ) -> Annotated[dict[str, Any], "metrics"]:
     """Burn GT polygons, then delegate to `dinov3_hot.evaluation.evaluate` on the spatial val set."""
+    from dinov3_hot.evaluation import evaluate as eval_run
+    from dinov3_hot.paths import resolve_labels_geojson
     from geomltoolkits.raster.burn import burn_labels
 
     chips_dir = resolve_directory(dataset_chips, "*.tif")
@@ -197,6 +197,8 @@ def tune_postprocess(
     split_info: dict[str, Any],
 ) -> Annotated[dict[str, Any], "recommended_inference_params"]:
     """Optuna over post-process params via `dinov3_hot.tune.tune_postprocess_run`."""
+    from dinov3_hot.paths import resolve_labels_geojson
+    from dinov3_hot.tune import tune_postprocess_run
 
     n_trials = int(hyperparameters.get("tune_postprocess_trials", 30))
     chips_dir = resolve_directory(dataset_chips, "*.tif")
@@ -223,6 +225,8 @@ def run_inference(
     inference_params: dict[str, Any],
 ) -> Annotated[dict[str, Any], "predictions"]:
     """ONNX inference via `dinov3_hot.serve.predict_session`."""
+    from dinov3_hot.serve import predict_session
+
     from fair.serve.base import load_session
 
     return predict_session(
@@ -239,6 +243,10 @@ def export_onnx(
     num_classes: int = 2,
 ) -> Annotated[bytes, "onnx_model"]:
     """Export the trained decoder + frozen encoder to single-file ONNX bytes."""
+    import onnx
+    import torch
+    from dinov3_hot.serve import MODEL_INPUT_SIZE
+    from torch import nn
 
     class _MainOnly(nn.Module):
         def __init__(self, wrapped: nn.Module) -> None:
