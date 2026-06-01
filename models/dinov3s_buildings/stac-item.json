@@ -109,6 +109,7 @@
             "training.freeze_encoder": true,
             "training.norm_stats": "hot_global",
             "training.tune_postprocess_trials": 30,
+            "training.sample_fraction": 1.0,
             "inference.confidence_threshold": 0.4371,
             "inference.simplify_m": 0.9626,
             "inference.regularize_area_threshold": 0.4949,
@@ -140,7 +141,8 @@
             {"key": "regularize_overlap_tol_m2", "type": "float", "default": 3.9251, "min": 0.0, "max": 100.0, "description": "Maximum new neighbour overlap (m^2) allowed when substituting a polygon with its MBR. Keeps adjacent buildings from being merged."},
             {"key": "min_area_m2", "type": "float", "default": 2.6465, "min": 0.0, "max": 1000.0, "description": "Drop polygons smaller than this area (m^2). Filters specks from sub-pixel artefacts."},
             {"key": "seed_min_distance", "type": "int", "default": 6, "min": 1, "max": 32, "description": "Minimum pixel distance between watershed seeds picked from the predicted distance map. Larger values merge adjacent instances into a single building; smaller values split touching buildings more aggressively."},
-            {"key": "tune_postprocess_trials", "type": "int", "default": 30, "min": 0, "max": 500, "description": "Optuna trials run after training to find inference post-processing params that maximise F1 + 0.3 * mean_iou on the val set. Set to 0 to skip and use the catalog defaults. Requires at least 8 val chips; smaller val sets fall back to defaults with a warning."}
+            {"key": "tune_postprocess_trials", "type": "int", "default": 30, "min": 0, "max": 500, "description": "Optuna trials run after training to find inference post-processing params that maximise F1 + 0.3 * mean_iou on the val set. Set to 0 to skip and use the catalog defaults. Requires at least 8 val chips; smaller val sets fall back to defaults with a warning."},
+            {"key": "sample_fraction", "type": "float", "default": 1.0, "min": 0.001, "max": 1.0, "description": "Fraction of the train split actually loaded by the upstream dataloader (maps to dinov3_hot cfg.data_pct). Set to a small value in CI smoke runs to keep memory and time low. 1.0 uses everything."}
         ]
     },
     "assets": {

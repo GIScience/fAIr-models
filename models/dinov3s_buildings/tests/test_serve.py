@@ -7,8 +7,7 @@ from typing import Any
 import numpy as np
 import pytest
 import shapely.geometry as sgeom
-
-from models.dinov3s_buildings.pipeline import predict_session
+from dinov3_hot.serve import predict_session
 
 
 class _StubSession:

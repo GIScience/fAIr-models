@@ -107,6 +107,9 @@ def train_model(
     cfg.aux_in_index = AUX_IN_INDEX
     cfg.seed = split_info["seed"]
     cfg.data_root = str(Path(tempfile.mkdtemp()))
+    sample_fraction = float(hyperparameters.get("sample_fraction", 1.0))
+    if 0.0 < sample_fraction < 1.0:
+        cfg.data_pct = sample_fraction
     (Path(cfg.data_root) / "norm_stats.json").write_text(
         json.dumps({"mean": split_info["norm_mean"], "std": split_info["norm_std"]})
     )
