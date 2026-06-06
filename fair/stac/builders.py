@@ -538,6 +538,7 @@ def build_local_model_item(
     dataset_title: str | None = None,
     split_info: dict[str, Any] | None = None,
     training_metrics_href: str | None = None,
+    source_imagery: str | None = None,
 ) -> pystac.Item:
     _validate_providers(providers)
     geom = geometry if geometry is not None else base_model_item.geometry
@@ -573,6 +574,12 @@ def build_local_model_item(
         properties["fair:base_model_id"] = base_model_id
     if dataset_id is not None:
         properties["fair:dataset_id"] = dataset_id
+    base_model_title = base_props.get("title")
+    if base_model_title is not None:
+        properties["fair:base_model_title"] = base_model_title
+    base_model_name = base_props.get("mlm:name")
+    if base_model_name is not None:
+        properties["fair:base_model_name"] = base_model_name
 
     # Copy fields from base model that apply to the finetuned variant
     for field in (
@@ -581,9 +588,15 @@ def build_local_model_item(
         "mlm:accelerator_count",
         "fair:metrics_spec",
         "fair:hyperparameters_spec",
+        "fair:recommended_zoom",
     ):
         if field in base_props:
             properties[field] = base_props[field]
+
+    # Imagery is the dataset's source tiles, not a base-model default; the local
+    # model records the same imagery its training chips were cut from.
+    if source_imagery is not None:
+        properties["fair:source_imagery"] = source_imagery
 
     if metrics:
         properties.update(metrics)

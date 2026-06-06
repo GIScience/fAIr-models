@@ -60,15 +60,24 @@ class ServeConfigError(RuntimeError):
 def load_session(model_uri: str) -> Any:
     """Download the ONNX artifact and build a CPU inference session.
 
-    Cached so repeated requests for the same URI reuse the session.
+    Cached so repeated requests for the same URI reuse the session. Intra-op
+    threads are capped to FAIR_KNATIVE_ONNX_THREADS (0 = ORT default) so the
+    session does not oversubscribe the pod's CPU quota under concurrency 1.
     """
-    from onnxruntime import InferenceSession
+    from onnxruntime import GraphOptimizationLevel, InferenceSession, SessionOptions
     from upath import UPath
 
     source = UPath(model_uri)
     local_path = Path(tempfile.mkdtemp()) / (source.name or "model.onnx")
     local_path.write_bytes(source.read_bytes())
-    return InferenceSession(str(local_path), providers=["CPUExecutionProvider"])
+
+    options = SessionOptions()
+    options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.inter_op_num_threads = 1
+    intra_op_threads = int(os.environ.get("FAIR_KNATIVE_ONNX_THREADS", "0"))
+    if intra_op_threads > 0:
+        options.intra_op_num_threads = intra_op_threads
+    return InferenceSession(str(local_path), sess_options=options, providers=["CPUExecutionProvider"])
 
 
 def _load_pipeline() -> Any:
