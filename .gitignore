@@ -249,3 +249,6 @@ docs/schemas/
 runs
 CLAUDE.md
 .vscode/*
+.claude
+test_artifacts 
+ci-artifacts
