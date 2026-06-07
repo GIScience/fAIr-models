@@ -58,11 +58,10 @@ class ServeConfigError(RuntimeError):
 
 @lru_cache(maxsize=_ONNX_CACHE_SIZE)
 def load_session(model_uri: str) -> Any:
-    """Download the ONNX artifact and build a CPU inference session.
+    """Download the ONNX artifact and build a cached CPU inference session.
 
-    Cached so repeated requests for the same URI reuse the session. Intra-op
-    threads are capped to FAIR_KNATIVE_ONNX_THREADS (0 = ORT default) so the
-    session does not oversubscribe the pod's CPU quota under concurrency 1.
+    Intra-op threads are capped to FAIR_KNATIVE_ONNX_THREADS so the session
+    doesn't oversubscribe the pod's CPU quota at concurrency 1.
     """
     from onnxruntime import GraphOptimizationLevel, InferenceSession, SessionOptions
     from upath import UPath

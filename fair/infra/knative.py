@@ -32,8 +32,7 @@ class KnativeConfig:
     memory_request: str = "1Gi"
     memory_limit: str = "3Gi"
     model_module_env: str = "MODEL_MODULE"
-    # ONNX intra-op thread cap for the serving session. 0 = ORT default.
-    onnx_intra_threads: int = 0
+    onnx_intra_threads: int = 0  # 0 = ORT default (no cap)
     cors_origins: str = "*"
     cors_methods: str = "*"
     cors_headers: str = "*"
@@ -103,8 +102,7 @@ def _container_env(cfg: KnativeConfig, entrypoint: str) -> list[dict[str, str]]:
         {"name": "FAIR_KNATIVE_CORS_METHODS", "value": cfg.cors_methods},
         {"name": "FAIR_KNATIVE_CORS_HEADERS", "value": cfg.cors_headers},
     ]
-    # Cap BLAS/OpenMP threads in the numpy-heavy postprocess to the same value as
-    # the ONNX intra-op cap, avoiding CPU oversubscription at concurrency 1.
+    # Match OpenMP to the ONNX cap so the numpy postprocess doesn't oversubscribe CPU.
     if cfg.onnx_intra_threads > 0:
         env.append({"name": "OMP_NUM_THREADS", "value": str(cfg.onnx_intra_threads)})
     return env
@@ -133,8 +131,7 @@ def build_knative_manifest(
         raise KeyError(msg)
 
     props = item.properties
-    # Per-model pod resources live on the STAC item so a re-register reproduces
-    # the model's sized pod instead of falling back to cfg defaults.
+    # Per-model resources come from the STAC item so a re-register reproduces the sized pod.
     effective_cfg = replace(
         cfg,
         cpu_request=str(props.get("fair:cpu_request", cfg.cpu_request)),
@@ -175,8 +172,7 @@ def build_knative_manifest(
         ],
     }
 
-    # Pin to a specific DOKS node pool when the model declares one, so a tuned
-    # model lands on its sized hardware instead of any available ML node.
+    # Pin to the model's declared node pool so it lands on its sized hardware.
     node_pool = props.get("fair:node_pool")
     if node_pool:
         pod_spec["nodeSelector"] = {"doks.digitalocean.com/node-pool": str(node_pool)}

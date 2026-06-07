@@ -1,14 +1,9 @@
-"""`fair` command-line interface.
+"""`fair` command-line interface: a thin operator wrapper over `FairClient`.
 
-A thin operator-facing wrapper over `FairClient` that replicates the fAIr backend
-flow: build a dataset from a TMS URL + AOI into an editable draft STAC item,
-register it, finetune a base model on it, promote the result, and patch STAC item
-properties in place.
-
-STAC settings come from the environment: FAIR_STAC_API_URL, FAIR_STAC_API_KEY,
-FAIR_DSN, FAIR_USER_ID, FAIR_UPLOAD_ARTIFACTS, FAIR_RAW_DATA_API_URL. Training and
-promotion run through ZenML, which connects via its own ZENML_STORE_URL and active
-stack, not through this CLI.
+Replicates the backend flow: build a draft dataset STAC item from a TMS URL + AOI,
+register it, finetune a base model, promote the result, and patch STAC items in
+place. Config comes from FAIR_* env vars (see `_client`); training and promotion
+run through ZenML on its own stack, not this CLI.
 """
 
 import json
@@ -16,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Annotated, Any
 
+import pystac
 import typer
 
 from fair.client import FairClient
@@ -63,8 +59,8 @@ def _parse_value(raw: str) -> object:
         return raw
 
 
-def _dump_item(item: object) -> str:
-    return json.dumps(item.to_dict(transform_hrefs=False), indent=2)  # type: ignore[attr-defined]
+def _dump_item(item: pystac.Item) -> str:
+    return json.dumps(item.to_dict(transform_hrefs=False), indent=2)
 
 
 @dataset_app.command("build")

@@ -82,10 +82,7 @@ def materialize_dataset(
     geometry_type: str,
     osm_api_url: str,
 ) -> tuple[str, str, dict[str, Any], list[float]]:
-    """Download chips + OSM labels for `aoi` into `out_dir`.
-
-    Returns (chips_dir, labels_file, geometry, bbox).
-    """
+    """Download chips + OSM labels for `aoi`; return (chips_dir, labels_file, geometry, bbox)."""
     tms_mod, osm_mod = _require_geomltoolkits()
 
     out = Path(out_dir)

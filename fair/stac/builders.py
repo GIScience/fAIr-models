@@ -593,8 +593,7 @@ def build_local_model_item(
         if field in base_props:
             properties[field] = base_props[field]
 
-    # Imagery is the dataset's source tiles, not a base-model default; the local
-    # model records the same imagery its training chips were cut from.
+    # Record the dataset's imagery, not a base-model default: the chips were cut from it.
     if source_imagery is not None:
         properties["fair:source_imagery"] = source_imagery
 
