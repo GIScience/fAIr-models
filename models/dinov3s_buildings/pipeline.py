@@ -23,6 +23,8 @@ AUX_IN_INDEX = 2
 DEFAULT_INFERENCE_PARAMS: dict[str, Any] = {
     "confidence_threshold": 0.4371,
     "seed_min_distance": 6,
+    "large_blob_area_px": 1500,
+    "h_maxima_depth": 0.2,
     "simplify_m": 0.9626,
     "regularize_area_threshold": 0.4949,
     "regularize_overlap_tol_m2": 3.9251,
