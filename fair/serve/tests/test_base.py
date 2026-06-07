@@ -1,7 +1,5 @@
 """Tests for the Starlette serving app and ONNX session loader."""
 
-from __future__ import annotations
-
 import importlib
 import sys
 import textwrap

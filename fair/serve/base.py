@@ -19,8 +19,6 @@ directory and passes that directory to the pipeline's `predict(session,
 input_images, params)` function.
 """
 
-from __future__ import annotations
-
 import importlib
 import json
 import logging

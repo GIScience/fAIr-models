@@ -1,7 +1,5 @@
 """Per-model KNative Service: single config object, env-overridable."""
 
-from __future__ import annotations
-
 import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
@@ -38,7 +36,7 @@ class KnativeConfig:
     cors_headers: str = "*"
 
     @classmethod
-    def from_env(cls) -> KnativeConfig:
+    def from_env(cls) -> "KnativeConfig":
         env = os.environ.get
         return cls(
             namespace=env("FAIR_KNATIVE_NAMESPACE") or cls.namespace,
