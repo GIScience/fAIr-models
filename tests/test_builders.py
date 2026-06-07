@@ -334,6 +334,32 @@ class TestBuildLocalModelItem:
         )
         assert local.properties["fair:source_imagery"] == tms
 
+    def test_preview_location_is_dataset_bbox_center(self):
+        base = _base_model()
+        dataset_geometry = {
+            "type": "Polygon",
+            "coordinates": [[[85.51, 27.63], [85.53, 27.63], [85.53, 27.65], [85.51, 27.65], [85.51, 27.63]]],
+        }
+        local = build_local_model_item(
+            base_model_item=base,
+            item_id="local-v1",
+            checkpoint_href="https://example.com/finetuned.pt",
+            onnx_href="https://example.com/finetuned.onnx",
+            mlm_hyperparameters={"epochs": 1},
+            keywords=["building"],
+            base_model_href="../base-models/example-unet/example-unet.json",
+            dataset_href="../datasets/ds-1/ds-1.json",
+            version="2",
+            title="Local UNet v2",
+            description="Finetuned model.",
+            user_id="osm-42",
+            providers=_PROVIDERS,
+            geometry=dataset_geometry,
+        )
+        preview = local.properties["fair:preview_location"]
+        assert preview["type"] == "Point"
+        assert preview["coordinates"] == pytest.approx([85.52, 27.64])
+
     def test_zenml_artifact_version_id_stored_on_asset(self):
         base = _base_model()
         local = build_local_model_item(

@@ -37,6 +37,7 @@
         "fair:memory_request": "4Gi",
         "fair:memory_limit": "6Gi",
         "fair:recommended_zoom": 19,
+        "fair:preview_location": {"type": "Point", "coordinates": [-13.23723, 8.47532]},
         "fair:source_imagery": "https://tiles.openaerialmap.org/690585b76415e43597ffd7ea/0/690585b76415e43597ffd7eb/{z}/{x}/{y}",
         "keywords": ["building", "semantic-segmentation", "polygon"],
         "license": "Apache-2.0",

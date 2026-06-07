@@ -598,6 +598,11 @@ def build_local_model_item(
     if source_imagery is not None:
         properties["fair:source_imagery"] = source_imagery
 
+    properties["fair:preview_location"] = {
+        "type": "Point",
+        "coordinates": [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2],
+    }
+
     if metrics:
         properties.update(metrics)
 
