@@ -14,6 +14,7 @@ from fair.stac.constants import (
     LOCAL_MODEL_EXTENSIONS,
     OCI_IMAGE_INDEX_TYPE,
 )
+from fair.stac.location import derive_location_props
 from fair.stac.versioning import add_version_links
 
 
@@ -599,6 +600,7 @@ def build_local_model_item(
         "type": "Point",
         "coordinates": [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2],
     }
+    properties.update(derive_location_props(properties, bbox))
 
     if metrics:
         properties.update(metrics)
