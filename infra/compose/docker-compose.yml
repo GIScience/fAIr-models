@@ -54,7 +54,7 @@ services:
       minio:
         condition: service_healthy
     volumes:
-      - ../../data/sample:/data/sample:ro
+      - ${FAIR_SAMPLE_DATA:-../../data/sample}:/data/sample:ro
     entrypoint:
       - sh
       - -c

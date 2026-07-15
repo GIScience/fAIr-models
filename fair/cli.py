@@ -28,10 +28,12 @@ dataset_app = typer.Typer(no_args_is_help=True, help="Build and register trainin
 model_app = typer.Typer(no_args_is_help=True, help="Finetune and promote local models.")
 basemodel_app = typer.Typer(no_args_is_help=True, help="Register base models.")
 item_app = typer.Typer(no_args_is_help=True, help="Read and update STAC items in any collection.")
+stack_app = typer.Typer(no_args_is_help=True, help="Bring the local Compose stack up and down.")
 app.add_typer(dataset_app, name="dataset")
 app.add_typer(model_app, name="model")
 app.add_typer(basemodel_app, name="basemodel")
 app.add_typer(item_app, name="item")
+app.add_typer(stack_app, name="stack")
 
 _COLLECTIONS = {BASE_MODELS_COLLECTION, DATASETS_COLLECTION, LOCAL_MODELS_COLLECTION}
 
@@ -274,6 +276,34 @@ def item_deprecate(
     """Mark a STAC item deprecated."""
     item = _client()._get_backend().deprecate_item(_resolve_collection(collection), item_id)
     typer.echo(f"deprecated {collection}/{item.id}")
+
+
+@stack_app.command("up")
+def stack_up() -> None:
+    """Start Postgres + MinIO + STAC + MLflow + ZenML and register the ZenML stack."""
+    from fair.infra import stack
+
+    stack.up()
+    typer.echo("stack up. ZenML :8080  MLflow :5000  STAC :8082  MinIO :9001")
+
+
+@stack_app.command("down")
+def stack_down(
+    volumes: Annotated[bool, typer.Option("--volumes/--keep", help="Also remove volumes and state")] = False,
+) -> None:
+    """Stop the stack (containers only, or --volumes to wipe state)."""
+    from fair.infra import stack
+
+    stack.down(volumes=volumes)
+    typer.echo("stack down")
+
+
+@stack_app.command("status")
+def stack_status() -> None:
+    """Show the status of the stack containers."""
+    from fair.infra import stack
+
+    stack.status()
 
 
 if __name__ == "__main__":
