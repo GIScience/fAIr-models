@@ -12,6 +12,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - add ZenML integration for model promotion and STAC catalog synchronization
 - implement STAC catalog management and builders for datasets and models
 
+## v0.3.1 (2026-07-15)
+
+### Feat
+
+- **cli**: add cli option for fair app
+- **dinov3s**: add building small version of dino
+- **labels**: add ci label taint for training and inference
+- **locust**: add locust load testing for knative services
+- **ci**: add CI overrides for example pipeline execution
+- **gpu**: add gpu node in dok8s infra
+- **knative**: add knative inference with single endpoint
+
+### Fix
+
+- **pipeline**: fixes pipeline bug
+- **stack**: get stack up using cli commands
+- **location**: loc info in stac items
+- **inference-param**: added inference param for dino
+- **chore**: housekeeping
+- **chore**: cleanup
+- **preview**: location
+- **test**: fix test cases on the pipeline
+- **pipeline**: move all module to lazy import
+- **ci**: run model on dev container
+- **checkpoint**: adds stac endoint for uppernet dinov3s
+- **docs**: update model contribution guidelines for testing and Dockerfile stages
+- **ci**: increase timeout link in the ci
+- **ci**: add unet test cases
+- **test**: fix test cases for yolo
+- **pipeline**: add sidecar to the fraction too
+- **ci**: add ci run stern logs
+- **override**: hyper spec override is added
+- **hyperparam**: fix the keys in hyperparam for sample fraction
+- **sampling**: add random sampling as a fix for less data in the pipelines
+- **onnx-cleanup**: cleanup aetifax
+- **kubernetics**: pin the dep of kubernetics on ci
+- **ci**: add test cases for new items
+- **knative**: add cors into knative apis
+- **viz**: tms background on the charts
+- **bug-on-the-instrumentation-ci**: test
+- **dataset**: remove unused label_name parameter in VectorDataset
+- update .gitignore and improve smoke test URL validation
+- **sample**: fix sample upath for the docs and datasets
+
+### Perf
+
+- **mdoel**: add better finetuning and results
+
 ## v0.3.0 (2026-05-18)
 
 ### Feat
