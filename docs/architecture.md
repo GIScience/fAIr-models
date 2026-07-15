@@ -4,8 +4,7 @@ icon: lucide/blocks
 
 # Architecture
 
-![arch](https://github.com/user-attachments/assets/65f8c69f-e821-41ef-8944-6bc5f760c27b)
-
+<img width="4488" height="2904" alt="IMG_0027" src="https://github.com/user-attachments/assets/d4d60045-df45-41f2-ac87-edf7dfa1461f" />
 
 ## STAC Catalog Structure
 
