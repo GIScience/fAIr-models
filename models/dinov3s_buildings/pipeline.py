@@ -50,7 +50,7 @@ def split_dataset(
     from dinov3_hot.dataset import compute_dataset_stats, spatial_split
     from dinov3_hot.serve import HOT_MEAN, HOT_STD
 
-    chips_dir = resolve_directory(dataset_chips, "*.tif")
+    chips_dir = resolve_directory(dataset_chips, "*.tif*")
     chip_names = sorted(p.name for p in chips_dir.glob("*.tif"))
 
     val_ratio = hyperparameters.get("val_ratio", 0.2)
@@ -117,7 +117,7 @@ def train_model(
         json.dumps({"mean": split_info["norm_mean"], "std": split_info["norm_std"]})
     )
 
-    chips_dir = resolve_directory(dataset_chips, "*.tif")
+    chips_dir = resolve_directory(dataset_chips, "*.tif*")
     labels_geojson = resolve_labels_geojson(Path(resolve_directory(dataset_labels, "*.geojson")))
     pretrained = download_checkpoint(base_model_weights)
     encoder_ckpt = hf_hub_download(repo_id=cfg.hf_ckpt_repo, filename=cfg.hf_ckpt_file)
@@ -172,7 +172,7 @@ def evaluate_model(
     from dinov3_hot.paths import resolve_labels_geojson
     from geomltoolkits.raster.burn import burn_labels
 
-    chips_dir = resolve_directory(dataset_chips, "*.tif")
+    chips_dir = resolve_directory(dataset_chips, "*.tif*")
     labels_geojson = resolve_labels_geojson(Path(resolve_directory(dataset_labels, "*.geojson")))
     masks_dir = Path(tempfile.mkdtemp()) / "masks"
     burn_labels(
@@ -207,7 +207,7 @@ def tune_postprocess(
     from dinov3_hot.tune import tune_postprocess_run
 
     n_trials = int(hyperparameters.get("tune_postprocess_trials", 30))
-    chips_dir = resolve_directory(dataset_chips, "*.tif")
+    chips_dir = resolve_directory(dataset_chips, "*.tif*")
     labels_geojson = resolve_labels_geojson(Path(resolve_directory(dataset_labels, "*.geojson")))
 
     result = tune_postprocess_run(
