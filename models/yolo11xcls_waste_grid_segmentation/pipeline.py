@@ -13,7 +13,6 @@ from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializ
 MODEL_INPUT_SIZE = 128
 CELL_SIZE_M = 5.0
 CLASS_NAMES = ("background", "waste")
-CHIP_SIZE = MODEL_INPUT_SIZE
 
 
 def _get_device() -> str:
@@ -80,7 +79,7 @@ def _restore_checkpoint(trained_model: Any):
     return YOLO(trained_model)
 
 
-def preprocess(image_path: Any, chip_size: int = 640) -> Any:
+def preprocess(image_path: Any, chip_size: int = MODEL_INPUT_SIZE) -> Any:
     import numpy as np
     import rasterio
     import torch
@@ -94,146 +93,97 @@ def preprocess(image_path: Any, chip_size: int = 640) -> Any:
     return tensor
 
 
-def postprocess(results: Any) -> list[dict[str, Any]]:
-    detections: list[dict[str, Any]] = []
-    for result in results:
-        for box in result.boxes:
-            detections.append(
-                {
-                    "bbox": box.xyxy[0].tolist(),
-                    "confidence": box.conf.item(),
-                    "class": int(box.cls.item()),
-                }
-            )
-    return detections
-
-
-def _preprocess_onnx_image(img_path: Any) -> tuple[Any, Any, Any]:
+def postprocess(output: Any) -> list[dict[str, Any]]:
     import numpy as np
-    import rasterio
-    from PIL import Image
 
-    with rasterio.open(img_path) as src:
-        arr = src.read([1, 2, 3]).astype(np.float32) / 255.0
-        transform = src.transform
-        crs = src.crs
-
-    resized = [
-        np.asarray(Image.fromarray(arr[c]).resize((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), Image.Resampling.BILINEAR))
-        for c in range(arr.shape[0])
+    probs = np.atleast_2d(np.asarray(output))
+    class_ids = probs.argmax(axis=1)
+    return [
+        {
+            "class": int(cls),
+            "label": CLASS_NAMES[int(cls)],
+            "confidence": float(probs[i, int(cls)]),
+        }
+        for i, cls in enumerate(class_ids)
     ]
-    batch = np.stack(resized, axis=0)[np.newaxis, ...].astype(np.float32)
-    return batch, transform, crs
-
-
-def _nms(boxes: Any, scores: Any, iou_threshold: float) -> list[int]:
-    import numpy as np
-
-    if len(boxes) == 0:
-        return []
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-
-    keep: list[int] = []
-    while order.size > 0:
-        i = int(order[0])
-        keep.append(i)
-        if order.size == 1:
-            break
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
-        order = order[1:][iou <= iou_threshold]
-    return keep
-
-
-def _decode_yolo_output(
-    output: Any,
-    confidence_threshold: float,
-    iou_threshold: float,
-) -> list[dict[str, Any]]:
-    """Decode ultralytics YOLO ONNX output: shape (1, 4+nc, num_anchors)."""
-    import numpy as np
-
-    preds = np.squeeze(output, axis=0)
-    if preds.shape[0] < preds.shape[1]:
-        preds = preds.transpose(1, 0)
-
-    boxes_cxcywh = preds[:, :4]
-    class_scores = preds[:, 4:]
-    if class_scores.shape[1] == 0:
-        return []
-    class_ids = class_scores.argmax(axis=1)
-    confidences = class_scores.max(axis=1)
-
-    keep_mask = confidences >= confidence_threshold
-    if not keep_mask.any():
-        return []
-    boxes_cxcywh = boxes_cxcywh[keep_mask]
-    confidences = confidences[keep_mask]
-    class_ids = class_ids[keep_mask]
-
-    cx, cy, w, h = boxes_cxcywh[:, 0], boxes_cxcywh[:, 1], boxes_cxcywh[:, 2], boxes_cxcywh[:, 3]
-    boxes_xyxy = np.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], axis=1)
-
-    keep_idx = _nms(boxes_xyxy, confidences, iou_threshold)
-
-    scale = CHIP_SIZE / MODEL_INPUT_SIZE
-    detections: list[dict[str, Any]] = []
-    for idx in keep_idx:
-        x1, y1, x2, y2 = boxes_xyxy[idx] * scale
-        detections.append(
-            {
-                "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                "confidence": float(confidences[idx]),
-                "class": int(class_ids[idx]),
-            }
-        )
-    return detections
 
 
 def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str, Any]:
+    import numpy as np
+    import rasterio
+    from PIL import Image
+    from pyproj import Transformer
+    from shapely.geometry import mapping
+    from shapely.ops import transform as shapely_transform
+
     from fair.utils.data import resolve_directory
 
     if "confidence_threshold" not in params:
         raise ValueError("params['confidence_threshold'] is required")
     confidence_threshold = float(params["confidence_threshold"])
-    iou_threshold = float(params.get("iou_threshold", 0.45))
+    cell_size_m = float(params.get("cell_size_m", CELL_SIZE_M))
     input_name = session.get_inputs()[0].name
+    waste_idx = CLASS_NAMES.index("waste")
 
     input_dir = resolve_directory(input_images)
-    patterns = ("*.png", "*.tif", "*.tiff", "*.jpg")
-    img_paths = sorted(p for pat in patterns for p in input_dir.glob(pat))
-    if not img_paths:
-        msg = f"No input images found in {input_dir}"
+    chip_paths = sorted(p for pat in ("*.tif", "*.tiff") for p in input_dir.rglob(pat))
+    if not chip_paths:
+        msg = f"No georeferenced (.tif/.tiff) chips found in {input_dir}"
         raise FileNotFoundError(msg)
 
+    mosaic_path = build_mosaic(chip_paths)
     features: list[dict[str, Any]] = []
-    for img_path in img_paths:
-        batch, transform, crs = _preprocess_onnx_image(img_path)
-        output = session.run(None, {input_name: batch})[0]
-        for det in _decode_yolo_output(output, confidence_threshold, iou_threshold):
-            feature = _pixel_bbox_to_geo_feature(
-                det["bbox"],
-                transform,
-                crs,
+    with rasterio.open(mosaic_path) as mosaic:
+        mosaic_crs = mosaic.crs
+        bounds = mosaic.bounds
+        nodata = mosaic.nodata
+
+        centroid_lon = (bounds.left + bounds.right) / 2
+        centroid_lat = (bounds.bottom + bounds.top) / 2
+        target_crs = pick_utm_crs(centroid_lon, centroid_lat) if mosaic_crs.is_geographic else mosaic_crs
+
+        to_proj = Transformer.from_crs(mosaic_crs, target_crs, always_xy=True)
+        xs = [bounds.left, bounds.left, bounds.right, bounds.right]
+        ys = [bounds.bottom, bounds.top, bounds.bottom, bounds.top]
+        px, py = to_proj.transform(xs, ys)
+        bounds_proj = (min(px), min(py), max(px), max(py))
+
+        grid = build_grid_gdf(bounds_proj, cell_size_m, target_crs)
+        utm_to_mosaic = Transformer.from_crs(target_crs, mosaic_crs, always_xy=True)
+        to_wgs84 = Transformer.from_crs(target_crs, "EPSG:4326", always_xy=True)
+
+        for idx in grid.index:
+            cell_geom = grid.loc[idx, "geometry"]
+            arr = read_cell_array_from_mosaic(mosaic, cell_geom, utm_to_mosaic, nodata)
+            if arr is None or arr.size == 0:
+                continue
+
+            arr = arr.astype(np.float32) / 255.0
+            resized = [
+                np.asarray(
+                    Image.fromarray(arr[c]).resize((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), Image.Resampling.BILINEAR)
+                )
+                for c in range(arr.shape[0])
+            ]
+            batch = np.stack(resized, axis=0)[np.newaxis, ...].astype(np.float32)
+
+            probs = np.asarray(session.run(None, {input_name: batch})[0]).reshape(-1)
+            waste_confidence = float(probs[waste_idx])
+            label = "waste" if waste_confidence >= confidence_threshold else "background"
+
+            geom_wgs84 = shapely_transform(lambda x, y, _z=None: to_wgs84.transform(x, y), cell_geom)
+            features.append(
                 {
-                    "confidence": round(det["confidence"], 4),
-                    "class": det["class"],
-                    "source": img_path.name,
-                },
+                    "type": "Feature",
+                    "properties": {
+                        "cell_id": int(grid.loc[idx, "cell_id"]),
+                        "label": label,
+                        "confidence": round(waste_confidence, 4),
+                    },
+                    "geometry": mapping(geom_wgs84),
+                }
             )
-            features.append(feature)
-    return _build_feature_collection(features)
+    return {"type": "FeatureCollection", "features": features}
 
 
 def dataset_cache_dir(chips_path: str, labels_path: str, threshold: float, cell_size_m: float) -> Path:
@@ -279,19 +229,20 @@ def build_mosaic(chip_paths: list[Path]) -> Path:
     return vrt_path
 
 
-def load_labels_merged(labels_dir: Path, target_crs):
+def load_labels_merged(labels_path: Path, target_crs):
     import geopandas as gpd
-    import pandas as pd
 
-    files = sorted(labels_dir.rglob("*.geojson"))
-    if not files:
-        msg = f"No .geojson files under {labels_dir}"
-        raise FileNotFoundError(msg)
-    frames = [gpd.read_file(f) for f in files]
-    src_crs = next((f.crs for f in frames if f.crs is not None), "EPSG:4326")
-    combined = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=src_crs)
-    combined = combined.to_crs(target_crs)
-    return combined.geometry.union_all()
+    labels = gpd.read_file(labels_path)
+    if labels.crs is None:
+        labels = labels.set_crs("EPSG:4326")
+    labels = labels.to_crs(target_crs)
+
+    if "label" not in labels.columns:
+        return labels.geometry.union_all(), None
+
+    waste = labels[labels["label"] == 1]
+    background = labels[labels["label"] == 0]
+    return waste.geometry.union_all(), None if background.empty else background.geometry.union_all()
 
 
 def build_grid_gdf(bounds_proj, cell_size: float, crs):
@@ -315,12 +266,47 @@ def build_grid_gdf(bounds_proj, cell_size: float, crs):
     return gpd.GeoDataFrame(cells, crs=crs)
 
 
-def classify_cells(grid_gdf, labels_union, threshold: float):
+def classify_cells(
+    grid_gdf,
+    labels_union,
+    threshold: float,
+    background_union=None,
+    seed: int = 42,
+    mosaic_ds=None,
+    utm_to_mosaic=None,
+    nodata=None,
+):
     grid_gdf = grid_gdf.copy()
     intersections = grid_gdf.geometry.intersection(labels_union)
     grid_gdf["overlap_fraction"] = (intersections.area / grid_gdf.geometry.area).fillna(0.0)
     grid_gdf["label"] = (grid_gdf["overlap_fraction"] >= threshold).astype(int)
-    return grid_gdf
+
+    waste = grid_gdf[grid_gdf["label"] == 1]
+    background = None
+    if background_union is not None:
+        background_intersections = grid_gdf.geometry.intersection(background_union)
+        background_overlap = (background_intersections.area / grid_gdf.geometry.area).fillna(0.0)
+        background = grid_gdf[(background_overlap >= threshold) & (grid_gdf["label"] == 0)]
+
+    if background is None or background.empty:
+        candidates = grid_gdf[grid_gdf["label"] == 0]
+        if nodata is not None and mosaic_ds is not None and utm_to_mosaic is not None:
+            candidates = candidates[
+                candidates.geometry.apply(lambda geom: cell_nodata_share(mosaic_ds, geom, utm_to_mosaic, nodata) <= 0.2)
+            ]
+        background = candidates.sample(n=min(len(waste), len(candidates)), random_state=seed)
+
+    if background.empty:
+        msg = "No background cells available"
+        raise ValueError(msg)
+    return grid_gdf.loc[[*waste.index, *background.index]].copy()
+
+
+def cell_nodata_share(mosaic_ds, cell_geom, utm_to_mosaic, nodata) -> float:
+    arr = read_cell_array_from_mosaic(mosaic_ds, cell_geom, utm_to_mosaic, nodata)
+    if arr is None or arr.size == 0:
+        return 1.0
+    return float(((arr == nodata).all(axis=0)).mean())
 
 
 def read_cell_array_from_mosaic(mosaic_ds, cell_geom, utm_to_mosaic, nodata) -> Any:
@@ -345,7 +331,6 @@ def read_cell_array_from_mosaic(mosaic_ds, cell_geom, utm_to_mosaic, nodata) -> 
     if arr.size == 0:
         return None
 
-    # ToDO check for NoData
     if nodata is not None:
         mask = (arr == nodata).all(axis=0)
         if mask.mean() > 0.8:  # min covered area, same as min threshold as for waste intersetcion maybe?
@@ -361,6 +346,39 @@ def save_arr_as_png(arr: Any, out_path: Path) -> None:
     Image.fromarray(rgb, mode="RGB").save(out_path, format="PNG")
 
 
+def resolve_chip_paths(chips_path: str) -> list[Path]:
+    from fair.utils.data import resolve_directory
+
+    return sorted(resolve_directory(chips_path).rglob("*.tif"))
+
+
+def resolve_label_file(labels_path: str) -> Path:
+    from fair.utils.data import resolve_directory
+
+    labels_dir = resolve_directory(labels_path)
+    if labels_dir.is_file():
+        return labels_dir
+    return sorted([*labels_dir.rglob("*.geojson"), *labels_dir.rglob("*.gpkg")])[0]
+
+
+def reset_yolo_dirs(yolo_dir: Path) -> None:
+    if yolo_dir.exists():
+        shutil.rmtree(yolo_dir)
+    for split in ("train", "val"):
+        for cls in CLASS_NAMES:
+            (yolo_dir / split / cls).mkdir(parents=True)
+
+
+def projected_bounds(bounds, source_crs, target_crs):
+    from pyproj import Transformer
+
+    to_proj = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+    xs = [bounds.left, bounds.left, bounds.right, bounds.right]
+    ys = [bounds.bottom, bounds.top, bounds.bottom, bounds.top]
+    px, py = to_proj.transform(xs, ys)
+    return min(px), min(py), max(px), max(py)
+
+
 def _prepare_yolo_classification_dataset(
     chips_path: str,
     labels_path: str,
@@ -372,30 +390,14 @@ def _prepare_yolo_classification_dataset(
     import rasterio
     from pyproj import Transformer
 
-    from fair.utils.data import resolve_directory
-
     yolo_dir = dataset_cache_dir(chips_path, labels_path, waste_overlap_threshold, cell_size_m)
-
-    local_chips = resolve_directory(chips_path)
-    chip_paths = sorted(local_chips.rglob("*.tif"))
-    if not chip_paths:
-        msg = f"No chips under {chips_path}"
-        raise FileNotFoundError(msg)
-
-    labels_dir = resolve_directory(labels_path, "*.geojson")
-
-    mosaic_path = build_mosaic(chip_paths)
-
-    if yolo_dir.exists():
-        shutil.rmtree(yolo_dir)
-    for split in ("train", "val"):
-        for cls in CLASS_NAMES:
-            (yolo_dir / split / cls).mkdir(parents=True)
-
+    chip_paths = resolve_chip_paths(chips_path)
+    label_file = resolve_label_file(labels_path)
+    reset_yolo_dirs(yolo_dir)
     train_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
     val_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
 
-    with rasterio.open(mosaic_path) as mosaic:
+    with rasterio.open(build_mosaic(chip_paths)) as mosaic:
         mosaic_crs = mosaic.crs
         bounds = mosaic.bounds
         nodata = mosaic.nodata
@@ -404,24 +406,27 @@ def _prepare_yolo_classification_dataset(
         centroid_lat = (bounds.bottom + bounds.top) / 2
         target_crs = pick_utm_crs(centroid_lon, centroid_lat) if mosaic_crs.is_geographic else mosaic_crs
 
-        to_proj = Transformer.from_crs(mosaic_crs, target_crs, always_xy=True)
-        xs = [bounds.left, bounds.left, bounds.right, bounds.right]
-        ys = [bounds.bottom, bounds.top, bounds.bottom, bounds.top]
-        px, py = to_proj.transform(xs, ys)
-        bounds_proj = (min(px), min(py), max(px), max(py))
-
-        grid = build_grid_gdf(bounds_proj, cell_size_m, target_crs)
-        labels_union = load_labels_merged(labels_dir, target_crs)
-        grid = classify_cells(grid, labels_union, waste_overlap_threshold)
-
+        grid = build_grid_gdf(projected_bounds(bounds, mosaic_crs, target_crs), cell_size_m, target_crs)
         utm_to_mosaic = Transformer.from_crs(target_crs, mosaic_crs, always_xy=True)
+        waste_union, background_union = load_labels_merged(label_file, target_crs)
+        grid = classify_cells(
+            grid,
+            waste_union,
+            waste_overlap_threshold,
+            background_union=background_union,
+            seed=seed,
+            mosaic_ds=mosaic,
+            utm_to_mosaic=utm_to_mosaic,
+            nodata=nodata,
+        )
+
         rng = random.Random(seed)
 
         for label_value, cls_name in enumerate(CLASS_NAMES):
             class_cells = grid[grid["label"] == label_value]
             cell_ids = list(class_cells.index)
             rng.shuffle(cell_ids)
-            n_val = int(round(len(cell_ids) * val_ratio)) if cell_ids else 0
+            n_val = round(len(cell_ids) * val_ratio) if cell_ids else 0
             val_set = set(cell_ids[:n_val])
 
             for idx in cell_ids:
@@ -442,6 +447,29 @@ def _prepare_yolo_classification_dataset(
                     train_counts[cls_name] += 1
 
     return yolo_dir, train_counts, val_counts
+
+
+def _resolve_yolo_dir_for_step(
+    dataset_chips: str,
+    dataset_labels: str,
+    hyperparameters: dict[str, Any],
+    split_info: dict[str, Any],
+) -> Path:
+    """Resolve the generated dataset, rebuilding it in an isolated step container."""
+    yolo_dir = Path(split_info["_yolo_dir"])
+    if all((yolo_dir / split / cls).is_dir() for split in ("train", "val") for cls in CLASS_NAMES):
+        return yolo_dir
+
+    chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
+    yolo_dir, _, _ = _prepare_yolo_classification_dataset(
+        chips_path,
+        dataset_labels,
+        waste_overlap_threshold=split_info.get("waste_overlap_threshold", 0.8),
+        cell_size_m=split_info.get("cell_size_m", CELL_SIZE_M),
+        val_ratio=split_info["val_ratio"],
+        seed=split_info.get("seed", 42),
+    )
+    return yolo_dir
 
 
 @step
@@ -510,19 +538,12 @@ def train_model(
     learning_rate = hyperparameters.get("learning_rate", 0.01)
     freeze_encoder = hyperparameters.get("freeze_encoder", True)
 
-    yolo_dir = Path(split_info["_yolo_dir"])
-    if not yolo_dir.exists() or not all(
-        (yolo_dir / split / cls).exists() for split in ("train", "val") for cls in CLASS_NAMES
-    ):
-        chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-        yolo_dir, _, _ = _prepare_yolo_classification_dataset(
-            chips_path,
-            dataset_labels,
-            waste_overlap_threshold=split_info.get("waste_overlap_threshold", 0.8),
-            cell_size_m=split_info.get("cell_size_m", CELL_SIZE_M),
-            val_ratio=split_info["val_ratio"],
-            seed=split_info.get("seed", 42),
-        )
+    yolo_dir = _resolve_yolo_dir_for_step(
+        dataset_chips,
+        dataset_labels,
+        hyperparameters,
+        split_info,
+    )
 
     yolo_settings.update({"mlflow": False})
     local_weights = _download_checkpoint(base_model_weights)
@@ -568,19 +589,12 @@ def evaluate_model(
 ) -> Annotated[dict[str, Any], "metrics"]:
     chip_size = hyperparameters.get("chip_size", MODEL_INPUT_SIZE)
 
-    yolo_dir = Path(split_info["_yolo_dir"])
-    if not yolo_dir.exists() or not all(
-        (yolo_dir / split / cls).exists() for split in ("train", "val") for cls in CLASS_NAMES
-    ):
-        chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-        yolo_dir, _, _ = _prepare_yolo_classification_dataset(
-            chips_path,
-            dataset_labels,
-            waste_overlap_threshold=split_info.get("waste_overlap_threshold", 0.8),
-            cell_size_m=split_info.get("cell_size_m", CELL_SIZE_M),
-            val_ratio=split_info["val_ratio"],
-            seed=split_info.get("seed", 42),
-        )
+    yolo_dir = _resolve_yolo_dir_for_step(
+        dataset_chips,
+        dataset_labels,
+        hyperparameters,
+        split_info,
+    )
 
     model = _restore_checkpoint(trained_model)
     results = model.val(data=str(yolo_dir), imgsz=chip_size, verbose=False)
