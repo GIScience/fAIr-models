@@ -9,11 +9,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml README.md fair_zenml_patch.pth /tmp/fair-src/
 COPY fair /tmp/fair-src/fair
 RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install hatchling hatch-vcs
+RUN --mount=type=cache,target=/root/.cache/uv \
+    python -m pip install \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.10.0+cpu \
+    torchvision==0.25.0+cpu
+RUN --mount=type=cache,target=/root/.cache/uv \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
     uv pip install \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
-    --index-strategy unsafe-best-match \
-    torch==2.10.0 \
+    --no-build-isolation \
     "ultralytics>=8.4.0" \
     rasterio \
     pyproj \
@@ -30,7 +35,7 @@ FROM python:3.13-slim-trixie AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libexpat1 libgdal36 gdal-bin libgl1 libglib2.0-0 \
+    git libexpat1 libgdal36 gdal-bin libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
