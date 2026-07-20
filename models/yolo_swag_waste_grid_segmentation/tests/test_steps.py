@@ -25,7 +25,7 @@ def pretrained_weights(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 def test_split_dataset(toy_chips: Path, toy_labels: Path, base_hyperparameters: dict[str, Any]) -> None:
-    from models.yolo11xcls_waste_grid_segmentation.pipeline import split_dataset
+    from models.yolo_swag_waste_grid_segmentation.pipeline import split_dataset
 
     info = split_dataset.entrypoint(
         dataset_chips=str(toy_chips),
@@ -44,7 +44,7 @@ def test_train_model(
     base_hyperparameters: dict[str, Any],
     pretrained_weights: str,
 ) -> None:
-    from models.yolo11xcls_waste_grid_segmentation.pipeline import split_dataset, train_model
+    from models.yolo_swag_waste_grid_segmentation.pipeline import split_dataset, train_model
 
     split_info = split_dataset.entrypoint(
         dataset_chips=str(toy_chips),
@@ -71,7 +71,7 @@ def test_evaluate_model(
     base_hyperparameters: dict[str, Any],
     pretrained_weights: str,
 ) -> None:
-    from models.yolo11xcls_waste_grid_segmentation.pipeline import evaluate_model, split_dataset, train_model
+    from models.yolo_swag_waste_grid_segmentation.pipeline import evaluate_model, split_dataset, train_model
 
     split_info = split_dataset.entrypoint(
         dataset_chips=str(toy_chips),
@@ -103,7 +103,7 @@ def test_evaluate_model(
 def test_export_onnx(base_hyperparameters: dict[str, Any]) -> None:
     import onnx
 
-    from models.yolo11xcls_waste_grid_segmentation.pipeline import export_onnx
+    from models.yolo_swag_waste_grid_segmentation.pipeline import export_onnx
 
     model = unet(weights=None, classes=2).cpu()
     onnx_bytes = export_onnx.entrypoint(
