@@ -115,13 +115,13 @@
         },
         "pre_processing_function": {
           "format": "python",
-          "expression": "models.yolo11xcls_waste_grid_segmentation.pipeline:preprocess"
+          "expression": "models.yolo11_swag_waste_grid_segmentation.pipeline:preprocess"
         }
       }
     ],
     "mlm:output": [
       {
-        "name": "waste segmentation",
+        "name": "waste-segmentation",
         "tasks": [
           "instance-segmentation"
         ],
@@ -136,7 +136,7 @@
           ],
           "data_type": "float32"
         },
-        "description": "Per-cell classication of the grid.",
+        "description": "Per-cell classification of the grid.",
         "classification:classes": [
           {
             "name": "background",
@@ -151,7 +151,7 @@
         ],
         "post_processing_function": {
           "format": "python",
-          "expression": "models.yolo11xcls_waste_grid_segmentation.pipeline:postprocess"
+          "expression": "models.yolo_swag_waste_grid_segmentation.pipeline:postprocess"
         },
         "bands": []
       }
@@ -318,7 +318,7 @@
   "assets": {
     "checkpoint": {
       "href": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/raw/refs/heads/main/data/models/train/weights/best.pt",
-      "title": "Pretrained YOLO11x-cls model weights for Solid Waster detection",
+      "title": "Pretrained YOLO26x-cls model weights for solid waste detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
         "mlm:model",
@@ -359,15 +359,15 @@
       ]
     },
     "source-code": {
-      "href": "https://github.com/GiScience/fAIr-models/tree/main/models/yolo11xcls_waste_grid_segmentation",
+      "href": "https://github.com/GiScience/fAIr-models/tree/main/models/yolo_swag_waste_grid_segmentation",
       "type": "text/html",
       "roles": [
         "code"
       ],
-      "mlm:entrypoint": "models.yolo11xcls_waste_grid_segmentation.pipeline:predict"
+      "mlm:entrypoint": "models.yolo_swag_waste_grid_segmentation.pipeline:predict"
     },
     "mlm:training": {
-      "href": "ghcr.io/hotosm/fair-models/yolo11xcls_waste_grid_segmentation:latest",
+      "href": "ghcr.io/hotosm/fair-models/yolo_swag_waste_grid_segmentation:latest",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Training Docker Image",
       "roles": [
@@ -375,7 +375,7 @@
       ]
     },
     "mlm:inference": {
-      "href": "ghcr.io/hotosm/fair-models/yolo11xcls_waste_grid_segmentation:latest-inference",
+      "href": "ghcr.io/hotosm/fair-models/yolo11_swag_waste_grid_segmentation:latest-inference",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Inference Docker Image",
       "roles": [
@@ -383,8 +383,7 @@
       ]
     },
     "readme": {
-      "href": "https://raw.githubusercontent.com/GiScience/fAIr-models/refs/heads/main/models/yolo11xcls_waste_grid_segmentation/README.md",
-      "type": "text/markdown",
+      "href": "https://raw.githubusercontent.com/GiScience/fAIr-models/refs/heads/main/models/yolo_swag_waste_grid_segmentation/README.md",      "type": "text/markdown",
       "roles": [
         "metadata"
       ],
