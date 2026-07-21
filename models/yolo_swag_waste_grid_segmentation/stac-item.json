@@ -57,7 +57,7 @@
     "mlm:framework": "PyTorch",
     "mlm:framework_version": "2.10.0",
     "mlm:pretrained": true,
-    "mlm:pretrained_source": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/tree/main/data/models/train/weights/best.pt",
+    "mlm:pretrained_source": "https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/main/data/checkpoint/checkpoint_v1.pt",
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
     "keywords": [
@@ -115,7 +115,7 @@
         },
         "pre_processing_function": {
           "format": "python",
-          "expression": "models.yolo_swag_waste_grid_segmentation.pipeline:preprocess"
+          "expression": "models.yolo11_swag_waste_grid_segmentation.pipeline:preprocess"
         }
       }
     ],
@@ -141,12 +141,12 @@
           {
             "name": "background",
             "value": 0,
-            "description": "Grid cell selected from label=0 features, or randomly sampled from cells with zero waste overlap when no label=0 features are provided"
+            "description": "Grid cell has less than waste_overlap_threshold coverage by supplied polygon labels"
           },
           {
             "name": "waste",
             "value": 1,
-            "description": "Grid cell is covered by label=1 features above waste_overlap_threshold"
+            "description": "Grid cell is covered by supplied polygon labels above waste_overlap_threshold"
           }
         ],
         "post_processing_function": {
@@ -177,7 +177,7 @@
       "strategy": "grid_5m_stratified_random",
       "default_ratio": 0.2,
       "seed": 42,
-      "description": "Mosaic chips, build a 5 m x 5 m grid, use label=1 features as waste, label=0 features as no-waste/background, and sample random background cells only when no label=0 features are provided"
+      "description": "Mosaic chips, build 5 m x 5 m grid, classify each cell as waste/no_waste by label overlap, random hold-out"
     },
     "fair:hyperparameters_spec": [
       {
@@ -295,7 +295,7 @@
         "default": 0.8,
         "min": 0.0,
         "max": 1.0,
-        "description": "Minimum fractional area of a grid cell covered by label=1 features for the cell to be labeled 'waste'"
+        "description": "Minimum fractional area of a grid cell covered by label polygons for the cell to be labeled 'waste'"
       },
       {
         "key": "cell_size_m",
@@ -317,8 +317,8 @@
   },
   "assets": {
     "checkpoint": {
-      "href": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/raw/refs/heads/main/data/models/train/weights/best.pt",
-      "title": "Pretrained YOLO11x-cls model weights for Solid Waster detection",
+      "href": "https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/main/data/checkpoint/checkpoint_v1.pt",
+      "title": "Pretrained YOLO26x-cls model weights for solid waste detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
         "mlm:model",
@@ -375,7 +375,7 @@
       ]
     },
     "mlm:inference": {
-      "href": "ghcr.io/hotosm/fair-models/yolo_swag_waste_grid_segmentation:latest-inference",
+      "href": "ghcr.io/hotosm/fair-models/yolo11_swag_waste_grid_segmentation:latest-inference",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Inference Docker Image",
       "roles": [
