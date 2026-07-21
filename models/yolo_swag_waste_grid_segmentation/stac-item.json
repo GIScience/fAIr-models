@@ -57,7 +57,7 @@
     "mlm:framework": "PyTorch",
     "mlm:framework_version": "2.10.0",
     "mlm:pretrained": true,
-    "mlm:pretrained_source": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/tree/main/data/models/train/weights/best.pt",
+    "mlm:pretrained_source": "https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/main/data/checkpoint/checkpoint_v1.pt",
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
     "keywords": [
@@ -317,8 +317,8 @@
   },
   "assets": {
     "checkpoint": {
-      "href": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/raw/refs/heads/main/data/models/train/weights/best.pt",
-      "title": "Pretrained YOLO26x-cls model weights for Solid Waster detection",
+      "href": "https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/main/data/checkpoint/checkpoint_v1.pt",
+      "title": "Pretrained YOLO26x-cls model weights for solid waste detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
         "mlm:model",
