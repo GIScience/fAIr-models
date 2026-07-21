@@ -9,7 +9,7 @@
     "https://stac-extensions.github.io/raster/v1.1.0/schema.json",
     "https://hotosm.github.io/fAIr-models/schemas/v1.0.0/base-model/schema.json"
   ],
-  "id": "yolo11xcls-waste-grid-segmentation",
+  "id": "yolo_swag_waste_grid_segmentation",
   "geometry": {
     "type": "Polygon",
     "coordinates": [
@@ -318,7 +318,7 @@
   "assets": {
     "checkpoint": {
       "href": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/raw/refs/heads/main/data/models/train/weights/best.pt",
-      "title": "Pretrained YOLO11x-cls model weights for Solid Waster detection",
+      "title": "Pretrained YOLO26x-cls model weights for Solid Waster detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
         "mlm:model",
