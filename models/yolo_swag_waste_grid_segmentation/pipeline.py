@@ -125,10 +125,14 @@ def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str
     input_name = session.get_inputs()[0].name
     waste_idx = CLASS_NAMES.index("waste")
 
-    input_dir = resolve_directory(input_images)
-    chip_paths = sorted(p for pat in ("*.tif", "*.tiff") for p in input_dir.rglob(pat))
+    input_path = resolve_directory(input_images)
+    chip_paths = (
+        [input_path]
+        if input_path.is_file()
+        else sorted(p for pat in ("*.tif", "*.tiff") for p in input_path.rglob(pat))
+    )
     if not chip_paths:
-        msg = f"No georeferenced (.tif/.tiff) chips found in {input_dir}"
+        msg = f"No georeferenced (.tif/.tiff) chips found in {input_path}"
         raise FileNotFoundError(msg)
 
     mosaic_path = build_mosaic(chip_paths)
@@ -152,7 +156,12 @@ def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str
         utm_to_mosaic = Transformer.from_crs(target_crs, mosaic_crs, always_xy=True)
         to_wgs84 = Transformer.from_crs(target_crs, "EPSG:4326", always_xy=True)
 
-        for idx in grid.index:
+        cell_ids = grid.index
+        if params.get("show_progress"):
+            from tqdm.auto import tqdm
+
+            cell_ids = tqdm(cell_ids, desc="Predicting cells", unit="cell")
+        for idx in cell_ids:
             cell_geom = grid.loc[idx, "geometry"]
             arr = read_cell_array_from_mosaic(mosaic, cell_geom, utm_to_mosaic, nodata)
             if arr is None or arr.size == 0:
@@ -192,17 +201,29 @@ def dataset_cache_dir(chips_path: str, labels_path: str, threshold: float, cell_
 
 
 def _subset_chips_dir(chips_path: str, fraction: float) -> str:
-    if fraction >= 1.0:
+    """Return an evenly distributed, deterministic subset of chip files."""
+    if not 0.0 < fraction <= 1.0:
+        msg = "sample_fraction must be greater than 0 and no greater than 1"
+        raise ValueError(msg)
+    if fraction == 1.0:
         return chips_path
     from fair.utils.data import resolve_directory
 
     chips = sorted(resolve_directory(chips_path).rglob("*.tif"))
-    step = max(1, round(1 / fraction))
+    sample_size = min(len(chips), max(1, round(len(chips) * fraction)))
+    if sample_size == len(chips):
+        return chips_path
+
     subset = Path(tempfile.mkdtemp(prefix="yolo_chips_subset_"))
-    for chip in chips[::step]:
+    if sample_size == 1:
+        selected_chips = [chips[0]]
+    else:
+        selected_chips = [chips[round(index * (len(chips) - 1) / (sample_size - 1))] for index in range(sample_size)]
+    for chip in selected_chips:
         (subset / chip.name).symlink_to(chip)
         sidecar = chip.with_name(chip.name + ".aux.xml")
-        (subset / sidecar.name).symlink_to(sidecar)
+        if sidecar.exists():
+            (subset / sidecar.name).symlink_to(sidecar)
     return str(subset)
 
 
@@ -603,9 +624,11 @@ def evaluate_model(
         msg = "YOLO validation produced no results"
         raise RuntimeError(msg)
 
-    metrics_dict: dict[str, Any] = {
-        "accuracy": float(results.results_dict.get("metrics/accuracy_top1", 0.0)),
-    }
+    accuracy = results.results_dict.get("metrics/accuracy_top1")
+    if accuracy is None:
+        msg = "YOLO validation did not report top-1 accuracy"
+        raise RuntimeError(msg)
+    metrics_dict: dict[str, Any] = {"accuracy": float(accuracy)}
     log_evaluation_results(metrics_dict)
     return metrics_dict
 
