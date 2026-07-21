@@ -115,7 +115,7 @@
         },
         "pre_processing_function": {
           "format": "python",
-          "expression": "models.yolo11_swag_waste_grid_segmentation.pipeline:preprocess"
+          "expression": "models.yolo_swag_waste_grid_segmentation.pipeline:preprocess"
         }
       }
     ],
@@ -318,7 +318,7 @@
   "assets": {
     "checkpoint": {
       "href": "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/raw/refs/heads/main/data/models/train/weights/best.pt",
-      "title": "Pretrained YOLO26x-cls model weights for solid waste detection",
+      "title": "Pretrained YOLO11x-cls model weights for Solid Waster detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
         "mlm:model",
@@ -375,7 +375,7 @@
       ]
     },
     "mlm:inference": {
-      "href": "ghcr.io/hotosm/fair-models/yolo11_swag_waste_grid_segmentation:latest-inference",
+      "href": "ghcr.io/hotosm/fair-models/yolo_swag_waste_grid_segmentation:latest-inference",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Inference Docker Image",
       "roles": [

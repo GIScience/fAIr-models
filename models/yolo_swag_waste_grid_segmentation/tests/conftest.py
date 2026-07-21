@@ -1,3 +1,5 @@
+"""Deterministic toy chips and labels for waste-grid pipeline tests."""
+
 from __future__ import annotations
 
 import json
@@ -10,11 +12,15 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
-CHIP_COUNT = 6
-CHIP_SIZE = 256
-BASE_LON, BASE_LAT, STEP = 85.5, 27.6, 0.001
-_WEST, _SOUTH = BASE_LON, BASE_LAT
-_EAST, _NORTH = BASE_LON + 3 * STEP, BASE_LAT + 2 * STEP
+CHIPS_PER_SIDE = 2
+CHIP_PIXELS = 64
+STEP_DEG = 0.0002
+BASE_LON, BASE_LAT = 85.5, 27.6
+
+_WEST = BASE_LON
+_EAST = BASE_LON + CHIPS_PER_SIDE * STEP_DEG
+_SOUTH = BASE_LAT
+_NORTH = BASE_LAT + CHIPS_PER_SIDE * STEP_DEG
 _GEOMETRY = {
     "type": "Polygon",
     "coordinates": [[[_WEST, _SOUTH], [_EAST, _SOUTH], [_EAST, _NORTH], [_WEST, _NORTH], [_WEST, _SOUTH]]],
@@ -26,41 +32,44 @@ def create_toy_data(root: Path) -> dict[str, Path]:
     chips_dir = root / "chips"
     chips_dir.mkdir()
 
-    for i in range(CHIP_COUNT):
-        lon = BASE_LON + (i % 3) * STEP
-        lat = BASE_LAT + (i // 3) * STEP
-        transform = from_bounds(lon, lat, lon + STEP, lat + STEP, CHIP_SIZE, CHIP_SIZE)
-        with rasterio.open(
-            chips_dir / f"OAM-{i:04d}-0000-0000.tif",
-            "w",
-            driver="GTiff",
-            width=CHIP_SIZE,
-            height=CHIP_SIZE,
-            count=3,
-            dtype="uint8",
-            crs=CRS.from_epsg(4326),
-            transform=transform,
-        ) as dst:
-            dst.write(np.random.randint(0, 255, (3, CHIP_SIZE, CHIP_SIZE), dtype=np.uint8))
+    for row in range(CHIPS_PER_SIDE):
+        for col in range(CHIPS_PER_SIDE):
+            west = BASE_LON + col * STEP_DEG
+            south = BASE_LAT + row * STEP_DEG
+            east = west + STEP_DEG
+            north = south + STEP_DEG
+            transform = from_bounds(west, south, east, north, CHIP_PIXELS, CHIP_PIXELS)
+            chip_path = chips_dir / f"OAM-{row:02d}-{col:02d}.tif"
+            with rasterio.open(
+                chip_path,
+                "w",
+                driver="GTiff",
+                width=CHIP_PIXELS,
+                height=CHIP_PIXELS,
+                count=3,
+                dtype="uint8",
+                crs=CRS.from_epsg(4326),
+                transform=transform,
+            ) as dst:
+                pixel_value = 224 if col == 0 else 32
+                dst.write(np.full((3, CHIP_PIXELS, CHIP_PIXELS), pixel_value, dtype=np.uint8))
 
     labels_dir = root / "labels"
     labels_dir.mkdir()
-    features = []
-    for i in range(CHIP_COUNT):
-        lon = BASE_LON + (i % 3) * STEP
-        lat = BASE_LAT + (i // 3) * STEP
-        features.append(
-            {
-                "type": "Feature",
-                "properties": {"label": 1},
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [
-                        [[lon, lat], [lon + STEP, lat], [lon + STEP, lat + STEP], [lon, lat + STEP], [lon, lat]]
-                    ],
-                },
-            }
-        )
+    midpoint = BASE_LON + (CHIPS_PER_SIDE * STEP_DEG) / 2
+    left_half = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [_WEST, _SOUTH],
+                [midpoint, _SOUTH],
+                [midpoint, _NORTH],
+                [_WEST, _NORTH],
+                [_WEST, _SOUTH],
+            ]
+        ],
+    }
+    features = [{"type": "Feature", "properties": {"label": 1}, "geometry": left_half}]
     (labels_dir / "labels.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": features}))
 
     stac_path = root / "dataset-stac-item.json"
@@ -70,7 +79,7 @@ def create_toy_data(root: Path) -> dict[str, Path]:
 
 @pytest.fixture(scope="session")
 def generate_toy_dataset(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    return create_toy_data(tmp_path_factory.mktemp("toy_segmentation"))
+    return create_toy_data(tmp_path_factory.mktemp("toy_waste_grid"))
 
 
 def _build_dataset_stac_item(chips_dir: Path, labels_dir: Path) -> dict[str, Any]:
@@ -80,17 +89,17 @@ def _build_dataset_stac_item(chips_dir: Path, labels_dir: Path) -> dict[str, Any
         "stac_extensions": [
             "https://stac-extensions.github.io/label/v1.0.1/schema.json",
         ],
-        "id": "toy-segmentation",
+        "id": "toy-waste-grid",
         "geometry": _GEOMETRY,
         "bbox": _BBOX,
         "properties": {
             "datetime": "2024-01-01T00:00:00Z",
-            "description": "Toy segmentation dataset",
+            "description": "Toy waste-grid dataset",
             "label:type": "vector",
             "label:tasks": ["segmentation"],
-            "label:classes": [{"name": "building", "classes": ["yes"]}],
-            "label:description": "Segmentation labels",
-            "keywords": ["building"],
+            "label:classes": [{"name": "waste", "classes": ["yes"]}],
+            "label:description": "Polygon labels covering the left half of the mosaic",
+            "keywords": ["waste"],
             "fair:user_id": "test",
             "version": "1",
             "deprecated": False,
