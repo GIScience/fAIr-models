@@ -5,7 +5,7 @@
         "tree",
         "water",
         "landuse",
-        "solid-wastes",
+        "solid-waste"
     ],
     "allowed_tasks": [
         "semantic-segmentation",
