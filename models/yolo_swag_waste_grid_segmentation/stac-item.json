@@ -48,7 +48,7 @@
     "created": "2026-07-20T00:00:00Z",
     "updated": "2026-07-20T00:00:00Z",
     "title": "YOLO Solid Waste Analysis on spatial Grids",
-    "description": "A image classification model for detecting solid waste piles from UAV imagery. Pretrained on 60 OAM scenes throughout the globe.",
+    "description": "A grid-based semantic-segmentation model that classifies 5 m x 5 m UAV-imagery cells as background or waste. The classifier is pretrained on 60 globally distributed OpenAerialMap scenes.",
     "mlm:name": "yolo-swag-waste-grid-segmentation",
     "mlm:architecture": "yolo26xcls",
     "mlm:tasks": [
@@ -57,7 +57,7 @@
     "mlm:framework": "PyTorch",
     "mlm:framework_version": "2.10.0",
     "mlm:pretrained": true,
-    "mlm:pretrained_source": "https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/main/data/checkpoint/checkpoint_v1.pt",
+    "mlm:pretrained_source": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.pt",
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
     "keywords": [
@@ -161,19 +161,18 @@
     "mlm:hyperparameters": {
       "training.epochs": 5,
       "training.batch_size": 4,
-      "training.learning_rate": 0.0001,
+      "training.learning_rate": 0.001,
       "training.weight_decay": 0.0001,
-      "training.samples_per_epoch": 50,
       "training.optimizer": "AdamW",
-      "training.loss": "CrossEntropyLoss",
       "training.val_ratio": 0.2,
       "training.split_seed": 42,
       "training.scheduler": "cosine",
-      "training.max_grad_norm": 1.0,
       "training.freeze_encoder": true,
       "training.waste_overlap_threshold": 0.8,
       "training.cell_size_m": 5.0,
-      "inference.confidence_threshold": 0.5
+      "training.sample_fraction": 1.0,
+      "inference.confidence_threshold": 0.5,
+      "inference.cell_size_m": 5.0
     },
     "fair:split_spec": {
       "strategy": "grid_5m_stratified_random",
@@ -201,7 +200,7 @@
       {
         "key": "learning_rate",
         "type": "float",
-        "default": 0.0001,
+        "default": 0.001,
         "min": 1e-07,
         "max": 1.0,
         "description": "Optimizer learning rate"
@@ -215,14 +214,6 @@
         "description": "L2 regularization weight decay"
       },
       {
-        "key": "samples_per_epoch",
-        "type": "int",
-        "default": 50,
-        "min": 1,
-        "max": 100000,
-        "description": "Number of random samples drawn per epoch from the dataset"
-      },
-      {
         "key": "optimizer",
         "type": "str",
         "default": "AdamW",
@@ -232,16 +223,6 @@
           "SGD"
         ],
         "description": "Optimizer algorithm"
-      },
-      {
-        "key": "loss",
-        "type": "str",
-        "default": "CrossEntropyLoss",
-        "values": [
-          "CrossEntropyLoss",
-          "BCEWithLogitsLoss"
-        ],
-        "description": "Loss function for training"
       },
       {
         "key": "val_ratio",
@@ -270,14 +251,6 @@
         "description": "Learning rate scheduler applied per epoch"
       },
       {
-        "key": "max_grad_norm",
-        "type": "float",
-        "default": 1.0,
-        "min": 0.1,
-        "max": 100.0,
-        "description": "Maximum gradient norm for clipping"
-      },
-      {
         "key": "freeze_encoder",
         "type": "bool",
         "default": true,
@@ -303,9 +276,9 @@
         "key": "cell_size_m",
         "type": "float",
         "default": 5.0,
-        "min": 0.5,
-        "max": 100.0,
-        "description": "Edge length, in meters for the classication grid"
+        "min": 3.0,
+        "max": 10.0,
+        "description": "Edge length, in meters, for training and inference grid cells"
       },
       {
         "key": "sample_fraction",
@@ -313,13 +286,13 @@
         "default": 1.0,
         "min": 0.001,
         "max": 1.0,
-        "description": "Fraction of chip files used during training (stride-sampled; <1.0 enables fast smoke / CI runs)"
+        "description": "Fraction of chip files used during training (an evenly distributed deterministic subset; <1.0 enables fast smoke and CI runs)"
       }
     ]
   },
   "assets": {
     "checkpoint": {
-      "href": "https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/main/data/checkpoint/checkpoint_v1.pt",
+      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.pt",
       "title": "Pretrained YOLO26x-cls model weights for solid waste detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
@@ -339,29 +312,8 @@
         }
       ]
     },
-    "model": {
-      "href": "https://huggingface.co/hotosm/fair-ci-models/resolve/bf3692ffeadc18b52af5821798f8ab21bbc3cade/yolo11n_detection.onnx",
-      "title": "Portable ONNX inference model",
-      "type": "application/octet-stream; framework=onnx",
-      "roles": [
-        "mlm:model",
-        "mlm:compiled"
-      ],
-      "mlm:artifact_type": "onnx",
-      "raster:bands": [
-        {
-          "name": "red"
-        },
-        {
-          "name": "green"
-        },
-        {
-          "name": "blue"
-        }
-      ]
-    },
     "source-code": {
-      "href": "https://github.com/GiScience/fAIr-models/tree/main/models/yolo_swag_waste_grid_segmentation",
+      "href": "https://github.com/GIScience/fAIr-models/tree/master/models/yolo_swag_waste_grid_segmentation",
       "type": "text/html",
       "roles": [
         "code"
@@ -385,7 +337,8 @@
       ]
     },
     "readme": {
-      "href": "https://raw.githubusercontent.com/GiScience/fAIr-models/refs/heads/main/models/yolo_swag_waste_grid_segmentation/README.md",      "type": "text/markdown",
+      "href": "https://raw.githubusercontent.com/GIScience/fAIr-models/refs/heads/master/models/yolo_swag_waste_grid_segmentation/README.md",
+      "type": "text/markdown",
       "roles": [
         "metadata"
       ],
@@ -395,9 +348,9 @@
   "links": [
     {
       "rel": "license",
-      "href": "https://www.gnu.org/licenses/agpl-3.0.html",
+      "href": "https://spdx.org/licenses/MIT.html",
       "type": "text/html",
-      "title": "GNU Affero General Public License v3.0"
+      "title": "MIT License"
     },
     {
       "rel": "cite-as",

@@ -27,8 +27,8 @@ _GEOMETRY = {
 }
 _BBOX = [_WEST, _SOUTH, _EAST, _NORTH]
 _PRETRAINED_URL = (
-    "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/"
-    "raw/refs/heads/main/data/models/train/weights/best.pt"
+    "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/"
+    "main/data/checkpoint/checkpoint_v1.pt"
 )
 
 
@@ -91,7 +91,7 @@ def pretrained_weights(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Download the real two-class classifier used as the training base."""
     from upath import UPath
 
-    checkpoint = tmp_path_factory.mktemp("yolo11xcls_weights") / "best.pt"
+    checkpoint = tmp_path_factory.mktemp("yolo26xcls_weights") / "best.pt"
     checkpoint.write_bytes(UPath(_PRETRAINED_URL).read_bytes())
     return str(checkpoint)
 

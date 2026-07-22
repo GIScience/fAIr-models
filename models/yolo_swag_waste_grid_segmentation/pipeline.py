@@ -554,10 +554,17 @@ def train_model(
     from ultralytics import settings as yolo_settings
 
     epochs = hyperparameters["epochs"]
-    batch_size = hyperparameters.get("batch_size", 8)
+    batch_size = hyperparameters.get("batch_size", 4)
     chip_size = hyperparameters.get("chip_size", MODEL_INPUT_SIZE)
-    learning_rate = hyperparameters.get("learning_rate", 0.01)
+    learning_rate = hyperparameters.get("learning_rate", 0.001)
+    weight_decay = hyperparameters.get("weight_decay", 0.0001)
+    optimizer = hyperparameters.get("optimizer", "AdamW")
+    scheduler = hyperparameters.get("scheduler", "cosine")
     freeze_encoder = hyperparameters.get("freeze_encoder", True)
+
+    if scheduler not in {"cosine", "none"}:
+        msg = "scheduler must be 'cosine' or 'none'"
+        raise ValueError(msg)
 
     yolo_dir = _resolve_yolo_dir_for_step(
         dataset_chips,
@@ -584,8 +591,10 @@ def train_model(
             imgsz=chip_size,
             device=device,
             lr0=learning_rate,
+            weight_decay=weight_decay,
+            optimizer=optimizer,
             freeze=10 if freeze_encoder else 0,
-            cos_lr=True,
+            cos_lr=scheduler == "cosine",
             verbose=False,
         )
         if results and hasattr(results, "results_dict"):
