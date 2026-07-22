@@ -26,6 +26,10 @@ _GEOMETRY = {
     "coordinates": [[[_WEST, _SOUTH], [_EAST, _SOUTH], [_EAST, _NORTH], [_WEST, _NORTH], [_WEST, _SOUTH]]],
 }
 _BBOX = [_WEST, _SOUTH, _EAST, _NORTH]
+_PRETRAINED_URL = (
+    "https://github.com/GIScience/Open-access_Model_for_Solid_Waste_Detection_on_Crowdsourced_UAV_Imagery_in_Sub-Saharan_Africa/"
+    "raw/refs/heads/main/data/models/train/weights/best.pt"
+)
 
 
 def create_toy_data(root: Path) -> dict[str, Path]:
@@ -80,6 +84,16 @@ def create_toy_data(root: Path) -> dict[str, Path]:
 @pytest.fixture(scope="session")
 def generate_toy_dataset(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     return create_toy_data(tmp_path_factory.mktemp("toy_waste_grid"))
+
+
+@pytest.fixture(scope="session")
+def pretrained_weights(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Download the real two-class classifier used as the training base."""
+    from upath import UPath
+
+    checkpoint = tmp_path_factory.mktemp("yolo11xcls_weights") / "best.pt"
+    checkpoint.write_bytes(UPath(_PRETRAINED_URL).read_bytes())
+    return str(checkpoint)
 
 
 def _build_dataset_stac_item(chips_dir: Path, labels_dir: Path) -> dict[str, Any]:

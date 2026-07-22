@@ -61,6 +61,8 @@
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
     "keywords": [
+      "solid-waste",
+      "semantic-segmentation",
       "polygon"
     ],
     "license": "MIT",
@@ -123,7 +125,7 @@
       {
         "name": "waste-segmentation",
         "tasks": [
-          "instance-segmentation"
+          "semantic-segmentation"
         ],
         "result": {
           "shape": [
