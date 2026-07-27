@@ -452,7 +452,7 @@ def _prepare_yolo_classification_dataset(
             n_val = round(len(cell_ids) * val_ratio) if cell_ids else 0
             n_test = round(len(cell_ids) * test_ratio) if cell_ids else 0
             val_set = set(cell_ids[:n_val])
-            test_set = set(cell_ids[:n_test])
+            test_set = set(cell_ids[n_val : n_val + n_test])
 
             for idx in cell_ids:
                 arr = read_cell_array_from_mosaic(

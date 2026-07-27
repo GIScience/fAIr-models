@@ -27,8 +27,8 @@ _GEOMETRY = {
 }
 _BBOX = [_WEST, _SOUTH, _EAST, _NORTH]
 _PRETRAINED_URL = (
-    "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/"
-    "main/data/checkpoint/checkpoint_v1.pt"
+    "https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/"
+    "9f62fd1e4de6905a38620c195a6e62bcef280956/data/checkpoint/checkpoint_v1_extra_large.pt"
 )
 
 

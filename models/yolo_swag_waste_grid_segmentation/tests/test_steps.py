@@ -18,7 +18,7 @@ def test_split_dataset(
     toy_labels: Path,
     base_hyperparameters: dict[str, Any],
 ) -> None:
-    """Split the labelled grid cells into train and validation class folders."""
+    """Split the labelled grid cells into train, validation, and test folders."""
     from models.yolo_swag_waste_grid_segmentation.pipeline import CLASS_NAMES, split_dataset
 
     info = split_dataset.entrypoint(
@@ -30,13 +30,17 @@ def test_split_dataset(
     assert info["strategy"] == "grid_5m_stratified_random"
     assert info["train_count"] > 0
     assert info["val_count"] > 0
+    assert info["test_count"] > 0
     yolo_dir = Path(info["_yolo_dir"])
-    for split in ("train", "val"):
+    for split in ("train", "val", "test"):
         for class_name in CLASS_NAMES:
             assert list((yolo_dir / split / class_name).glob("cell_*.png"))
     train_cells = {image.stem for image in (yolo_dir / "train").rglob("cell_*.png")}
     val_cells = {image.stem for image in (yolo_dir / "val").rglob("cell_*.png")}
+    test_cells = {image.stem for image in (yolo_dir / "test").rglob("cell_*.png")}
     assert train_cells.isdisjoint(val_cells)
+    assert train_cells.isdisjoint(test_cells)
+    assert val_cells.isdisjoint(test_cells)
 
 
 def test_train_model(
