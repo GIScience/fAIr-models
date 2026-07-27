@@ -385,7 +385,7 @@ def resolve_label_file(labels_path: str) -> Path:
 def reset_yolo_dirs(yolo_dir: Path) -> None:
     if yolo_dir.exists():
         shutil.rmtree(yolo_dir)
-    for split in ("train", "val"):
+    for split in ("train", "val", "test"):
         for cls in CLASS_NAMES:
             (yolo_dir / split / cls).mkdir(parents=True)
 
@@ -405,9 +405,10 @@ def _prepare_yolo_classification_dataset(
     labels_path: str,
     waste_overlap_threshold: float,
     cell_size_m: float = CELL_SIZE_M,
-    val_ratio: float = 0.2,
+    val_ratio: float = 0.1,
+    test_ratio: float = 0.1,
     seed: int = 42,
-) -> tuple[Path, dict[str, int], dict[str, int]]:
+) -> tuple[Path, dict[str, int], dict[str, int], dict[str, int]]:
     import rasterio
     from pyproj import Transformer
 
@@ -417,6 +418,7 @@ def _prepare_yolo_classification_dataset(
     reset_yolo_dirs(yolo_dir)
     train_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
     val_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
+    test_counts: dict[str, int] = {cls: 0 for cls in CLASS_NAMES}
 
     with rasterio.open(build_mosaic(chip_paths)) as mosaic:
         mosaic_crs = mosaic.crs
@@ -448,7 +450,9 @@ def _prepare_yolo_classification_dataset(
             cell_ids = list(class_cells.index)
             rng.shuffle(cell_ids)
             n_val = round(len(cell_ids) * val_ratio) if cell_ids else 0
+            n_test = round(len(cell_ids) * test_ratio) if cell_ids else 0
             val_set = set(cell_ids[:n_val])
+            test_set = set(cell_ids[:n_test])
 
             for idx in cell_ids:
                 arr = read_cell_array_from_mosaic(
@@ -459,15 +463,17 @@ def _prepare_yolo_classification_dataset(
                 )
                 if arr is None or arr.size == 0:
                     continue
-                split = "val" if idx in val_set else "train"
+                split = "val" if idx in val_set else ("test" if idx in test_set else "train")
                 out_path = yolo_dir / split / cls_name / f"cell_{int(grid.loc[idx, 'cell_id']):08d}.png"
                 save_arr_as_png(arr, out_path)
                 if split == "val":
                     val_counts[cls_name] += 1
+                elif split == "test":
+                    test_counts[cls_name] += 1
                 else:
                     train_counts[cls_name] += 1
 
-    return yolo_dir, train_counts, val_counts
+    return yolo_dir, train_counts, val_counts, test_counts
 
 
 def _resolve_yolo_dir_for_step(
@@ -478,16 +484,17 @@ def _resolve_yolo_dir_for_step(
 ) -> Path:
     """Resolve the generated dataset, rebuilding it in an isolated step container."""
     yolo_dir = Path(split_info["_yolo_dir"])
-    if all((yolo_dir / split / cls).is_dir() for split in ("train", "val") for cls in CLASS_NAMES):
+    if all((yolo_dir / split / cls).is_dir() for split in ("train", "val", "test") for cls in CLASS_NAMES):
         return yolo_dir
 
     chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-    yolo_dir, _, _ = _prepare_yolo_classification_dataset(
+    yolo_dir, _, _, _ = _prepare_yolo_classification_dataset(
         chips_path,
         dataset_labels,
         waste_overlap_threshold=split_info.get("waste_overlap_threshold", 0.8),
         cell_size_m=split_info.get("cell_size_m", CELL_SIZE_M),
         val_ratio=split_info["val_ratio"],
+        test_ratio=split_info["test_ratio"],
         seed=split_info.get("seed", 42),
     )
     return yolo_dir
@@ -499,31 +506,37 @@ def split_dataset(
     dataset_labels: str,
     hyperparameters: dict[str, Any],
 ) -> Annotated[dict[str, Any], "split_info_artifact"]:
-    val_ratio = hyperparameters.get("val_ratio", 0.2)
+    val_ratio = hyperparameters.get("val_ratio", 0.1)
+    test_ratio = hyperparameters.get("test_ratio", 0.1)
     seed = hyperparameters.get("split_seed", 42)
     waste_overlap_threshold = hyperparameters.get("waste_overlap_threshold", 0.8)
     cell_size_m = hyperparameters.get("cell_size_m", CELL_SIZE_M)
 
     chips_path = _subset_chips_dir(dataset_chips, hyperparameters.get("sample_fraction", 1.0))
-    yolo_dir, train_counts, val_counts = _prepare_yolo_classification_dataset(
+    yolo_dir, train_counts, val_counts, test_counts = _prepare_yolo_classification_dataset(
         chips_path,
         dataset_labels,
         waste_overlap_threshold=waste_overlap_threshold,
         cell_size_m=cell_size_m,
         val_ratio=val_ratio,
+        test_ratio=test_ratio,
         seed=seed,
     )
 
     train_count = sum(train_counts.values())
     val_count = sum(val_counts.values())
+    test_count = sum(test_counts.values())
     split_info = {
         "strategy": "grid_5m_stratified_random",
         "val_ratio": val_ratio,
+        "test_ratio": test_ratio,
         "seed": seed,
         "train_count": train_count,
         "val_count": val_count,
+        "test_count": test_count,
         "train_counts_per_class": train_counts,
         "val_counts_per_class": val_counts,
+        "test_counts_per_class": test_counts,
         "waste_overlap_threshold": waste_overlap_threshold,
         "cell_size_m": cell_size_m,
         "class_names": list(CLASS_NAMES),
@@ -627,7 +640,7 @@ def evaluate_model(
     )
 
     model = _restore_checkpoint(trained_model)
-    results = model.val(data=str(yolo_dir), imgsz=chip_size, verbose=False)
+    results = model.val(data=str(yolo_dir), imgsz=chip_size, verbose=False, split="test")
 
     if not hasattr(results, "results_dict") or not results.results_dict:
         msg = "YOLO validation produced no results"
