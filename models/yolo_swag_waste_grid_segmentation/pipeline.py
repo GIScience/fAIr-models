@@ -267,14 +267,14 @@ def load_labels_merged(labels_path: Path, target_crs):
 
 
 def build_grid_gdf(bounds_proj, cell_size: float, crs):
+    import math
+
     import geopandas as gpd
     from shapely.geometry import box
 
     minx, miny, maxx, maxy = bounds_proj
-    minx = (minx // cell_size) * cell_size
-    miny = (miny // cell_size) * cell_size
-    cols = max(1, int((maxx - minx) // cell_size) + 1)
-    rows = max(1, int((maxy - miny) // cell_size) + 1)
+    cols = max(1, math.ceil((maxx - minx) / cell_size))
+    rows = max(1, math.ceil((maxy - miny) / cell_size))
 
     cells = []
     cell_id = 0
