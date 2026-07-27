@@ -27,7 +27,7 @@ def test_split_dataset(
         hyperparameters=base_hyperparameters,
     )
 
-    assert info["strategy"] == "grid_5m_stratified_random"
+    assert info["strategy"] == "grid_5m_stratified_grouped"
     assert info["train_count"] > 0
     assert info["val_count"] > 0
     assert info["test_count"] > 0

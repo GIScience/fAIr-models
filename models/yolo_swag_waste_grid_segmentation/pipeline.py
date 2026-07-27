@@ -250,7 +250,7 @@ def build_mosaic(chip_paths: list[Path]) -> Path:
     return vrt_path
 
 
-def load_labels_merged(labels_path: Path, target_crs):
+def load_labels(labels_path: Path, target_crs):
     import geopandas as gpd
 
     labels = gpd.read_file(labels_path)
@@ -259,11 +259,45 @@ def load_labels_merged(labels_path: Path, target_crs):
     labels = labels.to_crs(target_crs)
 
     if "label" not in labels.columns:
-        return labels.geometry.union_all(), None
+        labels["label"] = 1
+    return labels.reset_index(drop=True)
+
+
+def load_labels_merged(labels_path: Path, target_crs):
+    labels = load_labels(labels_path, target_crs)
 
     waste = labels[labels["label"] == 1]
     background = labels[labels["label"] == 0]
     return waste.geometry.union_all(), None if background.empty else background.geometry.union_all()
+
+
+def split_cells(cells, source_polygons, val_ratio: float, test_ratio: float, seed: int) -> dict[int, str]:
+    """Split complete source label-polygon groups."""
+    groups_by_polygon: dict[int, list[int]] = {}
+    for cell_id, cell in cells.iterrows():
+        overlap = source_polygons.geometry.intersection(cell.geometry).area
+        if overlap.max() <= 0:
+            msg = "Selected cells must overlap a source label polygon"
+            raise ValueError(msg)
+        polygon_id = int(overlap.idxmax())
+        groups_by_polygon.setdefault(polygon_id, []).append(cell_id)
+    groups = list(groups_by_polygon.values())
+
+    random.Random(seed).shuffle(groups)
+    val_count = round(len(groups) * val_ratio)
+    test_count = round(len(groups) * test_ratio)
+    val_count = max(1, val_count) if val_ratio else 0
+    test_count = max(1, test_count) if test_ratio else 0
+    if val_count + test_count >= len(groups):
+        msg = "Not enough source label polygons to create train, validation, and test splits"
+        raise ValueError(msg)
+
+    split_by_cell = {cell_id: "train" for group in groups for cell_id in group}
+    for group in groups[:val_count]:
+        split_by_cell.update(dict.fromkeys(group, "val"))
+    for group in groups[val_count : val_count + test_count]:
+        split_by_cell.update(dict.fromkeys(group, "test"))
+    return split_by_cell
 
 
 def build_grid_gdf(bounds_proj, cell_size: float, crs):
@@ -431,7 +465,17 @@ def _prepare_yolo_classification_dataset(
 
         grid = build_grid_gdf(projected_bounds(bounds, mosaic_crs, target_crs), cell_size_m, target_crs)
         utm_to_mosaic = Transformer.from_crs(target_crs, mosaic_crs, always_xy=True)
-        waste_union, background_union = load_labels_merged(label_file, target_crs)
+        label_polygons = load_labels(label_file, target_crs)
+        waste_polygons = label_polygons[label_polygons["label"] == 1]
+        if waste_polygons.empty:
+            msg = "At least one label=1 waste polygon is required"
+            raise ValueError(msg)
+        waste_union = waste_polygons.geometry.union_all()
+        background_polygons = label_polygons[label_polygons["label"] == 0]
+        if background_polygons.empty:
+            msg = "At least one label=0 background polygon is required"
+            raise ValueError(msg)
+        background_union = background_polygons.geometry.union_all()
         grid = classify_cells(
             grid,
             waste_union,
@@ -442,29 +486,17 @@ def _prepare_yolo_classification_dataset(
             utm_to_mosaic=utm_to_mosaic,
             nodata=nodata,
         )
-
-        rng = random.Random(seed)
-
         for label_value, cls_name in enumerate(CLASS_NAMES):
             class_cells = grid[grid["label"] == label_value]
-            cell_ids = list(class_cells.index)
-            rng.shuffle(cell_ids)
-            n_val = round(len(cell_ids) * val_ratio) if cell_ids else 0
-            n_test = round(len(cell_ids) * test_ratio) if cell_ids else 0
-            val_set = set(cell_ids[:n_val])
-            test_set = set(cell_ids[n_val : n_val + n_test])
+            source_polygons = waste_polygons if label_value == 1 else background_polygons
+            split_by_cell = split_cells(class_cells, source_polygons, val_ratio, test_ratio, seed)
 
-            for idx in cell_ids:
-                arr = read_cell_array_from_mosaic(
-                    mosaic,
-                    grid.loc[idx, "geometry"],
-                    utm_to_mosaic,
-                    nodata,
-                )
+            for cell_id, cell in class_cells.iterrows():
+                arr = read_cell_array_from_mosaic(mosaic, cell.geometry, utm_to_mosaic, nodata)
                 if arr is None or arr.size == 0:
                     continue
-                split = "val" if idx in val_set else ("test" if idx in test_set else "train")
-                out_path = yolo_dir / split / cls_name / f"cell_{int(grid.loc[idx, 'cell_id']):08d}.png"
+                split = split_by_cell[cell_id]
+                out_path = yolo_dir / split / cls_name / f"cell_{int(cell.cell_id):08d}.png"
                 save_arr_as_png(arr, out_path)
                 if split == "val":
                     val_counts[cls_name] += 1
@@ -527,7 +559,7 @@ def split_dataset(
     val_count = sum(val_counts.values())
     test_count = sum(test_counts.values())
     split_info = {
-        "strategy": "grid_5m_stratified_random",
+        "strategy": "grid_5m_stratified_grouped",
         "val_ratio": val_ratio,
         "test_ratio": test_ratio,
         "seed": seed,
@@ -543,7 +575,9 @@ def split_dataset(
         "description": (
             f"5 m x 5 m grid over the chip mosaic; cells with >= "
             f"{waste_overlap_threshold:.0%} label coverage are 'waste', "
-            f"else 'background'. Stratified random split holds out {val_ratio:.0%} per class."
+            f"else 'background'. Waste and background cells are grouped by their source "
+            f"label polygon. Validation and test target "
+            f"{val_ratio:.0%} and {test_ratio:.0%} of source-polygon groups."
         ),
         "_yolo_dir": str(yolo_dir),
     }

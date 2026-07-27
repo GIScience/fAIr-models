@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -61,19 +62,20 @@ def create_toy_data(root: Path) -> dict[str, Path]:
     labels_dir = root / "labels"
     labels_dir.mkdir()
     midpoint = BASE_LON + (CHIPS_PER_SIDE * STEP_DEG) / 2
-    left_half = {
-        "type": "Polygon",
-        "coordinates": [
-            [
-                [_WEST, _SOUTH],
-                [midpoint, _SOUTH],
-                [midpoint, _NORTH],
-                [_WEST, _NORTH],
-                [_WEST, _SOUTH],
-            ]
-        ],
-    }
-    features = [{"type": "Feature", "properties": {"label": 1}, "geometry": left_half}]
+    row_edges = [_SOUTH, _SOUTH + (_NORTH - _SOUTH) / 3, _SOUTH + 2 * (_NORTH - _SOUTH) / 3, _NORTH]
+    features = []
+    for south, north in pairwise(row_edges):
+        for west, east, label in ((_WEST, midpoint, 1), (midpoint, _EAST, 0)):
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": {"label": label},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]],
+                    },
+                }
+            )
     (labels_dir / "labels.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": features}))
 
     stac_path = root / "dataset-stac-item.json"

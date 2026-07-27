@@ -167,7 +167,8 @@
       "training.learning_rate": 0.001,
       "training.weight_decay": 0.0001,
       "training.optimizer": "AdamW",
-      "training.val_ratio": 0.2,
+      "training.val_ratio": 0.1,
+      "training.test_ratio": 0.1,
       "training.split_seed": 42,
       "training.scheduler": "cosine",
       "training.freeze_layers": 10,
@@ -178,10 +179,10 @@
       "inference.cell_size_m": 5.0
     },
     "fair:split_spec": {
-      "strategy": "grid_5m_stratified_random",
-      "default_ratio": 0.2,
+      "strategy": "grid_5m_stratified_grouped",
+      "default_ratio": 0.1,
       "seed": 42,
-      "description": "Mosaic chips, build a 5 m x 5 m grid, use label=1 features as waste, label=0 features as no-waste/background, and sample random background cells only when no label=0 features are provided"
+      "description": "Mosaic chips and build a 5 m x 5 m grid. Cells from each label=1 waste polygon and each label=0 background polygon remain in one split."
     },
     "fair:hyperparameters_spec": [
       {
@@ -230,10 +231,18 @@
       {
         "key": "val_ratio",
         "type": "float",
-        "default": 0.2,
+        "default": 0.1,
         "min": 0.05,
         "max": 0.5,
-        "description": "Fraction of data held out for validation"
+        "description": "Target fraction of source label-polygon groups held out for validation"
+      },
+      {
+        "key": "test_ratio",
+        "type": "float",
+        "default": 0.1,
+        "min": 0.05,
+        "max": 0.5,
+        "description": "Target fraction of source label-polygon groups held out for final evaluation"
       },
       {
         "key": "split_seed",
@@ -241,7 +250,7 @@
         "default": 42,
         "min": 0,
         "max": 2147483647,
-        "description": "Random seed for reproducible train/val split"
+        "description": "Random seed for reproducible train, validation, and test splitting"
       },
       {
         "key": "scheduler",
