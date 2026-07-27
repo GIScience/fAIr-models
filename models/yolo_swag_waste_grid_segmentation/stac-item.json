@@ -254,7 +254,7 @@
         "description": "Learning rate scheduler applied per epoch"
       },
       {
-        "key": "freeze_encoder",
+        "key": "freeze_layers",
         "type": "int",
         "default": 10,
         "min": 0,
