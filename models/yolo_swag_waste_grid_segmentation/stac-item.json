@@ -316,7 +316,7 @@
       ]
     },
     "model": {
-      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.onnx",
+      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1_extra_large.onnx",
       "title": "Portable YOLO26x-cls ONNX inference model",
       "type": "application/octet-stream; framework=onnx",
       "roles": [
