@@ -57,7 +57,7 @@
     "mlm:framework": "PyTorch",
     "mlm:framework_version": "2.10.0",
     "mlm:pretrained": true,
-    "mlm:pretrained_source": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.pt",
+    "mlm:pretrained_source": "https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/9f62fd1e4de6905a38620c195a6e62bcef280956/data/checkpoint/checkpoint_v1_extra_large.pt",
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
     "fair:recommended_zoom": 22,
@@ -162,7 +162,7 @@
       }
     ],
     "mlm:hyperparameters": {
-      "training.epochs": 5,
+      "training.epochs": 20,
       "training.batch_size": 4,
       "training.learning_rate": 0.001,
       "training.weight_decay": 0.0001,
@@ -170,7 +170,7 @@
       "training.val_ratio": 0.2,
       "training.split_seed": 42,
       "training.scheduler": "cosine",
-      "training.freeze_encoder": true,
+      "training.freeze_layers": 10,
       "training.waste_overlap_threshold": 0.8,
       "training.cell_size_m": 5.0,
       "training.sample_fraction": 1.0,
@@ -255,9 +255,10 @@
       },
       {
         "key": "freeze_encoder",
-        "type": "bool",
-        "default": true,
-        "description": "Freeze pretrained encoder weights during finetuning"
+        "type": "int",
+        "default": 10,
+        "min": 0,
+        "description": "Number of first YOLO layers to freeze during finetuning; use 0 to freeze none"
       },
       {
         "key": "confidence_threshold",
@@ -295,7 +296,7 @@
   },
   "assets": {
     "checkpoint": {
-      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.pt",
+      "href": "https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/9f62fd1e4de6905a38620c195a6e62bcef280956/data/checkpoint/checkpoint_v1_extra_large.pt",
       "title": "Pretrained YOLO26x-cls model weights for solid waste detection",
       "type": "application/octet-stream; framework=pytorch",
       "roles": [
@@ -316,7 +317,7 @@
       ]
     },
     "model": {
-      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.onnx",
+      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/9f62fd1e4de6905a38620c195a6e62bcef280956/data/checkpoint/checkpoint_v1_extra_large.onnx",
       "title": "Portable YOLO26x-cls ONNX inference model",
       "type": "application/octet-stream; framework=onnx",
       "roles": [
