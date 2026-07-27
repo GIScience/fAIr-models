@@ -8,6 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml README.md fair_zenml_patch.pth /tmp/fair-src/
 COPY fair /tmp/fair-src/fair
+
+COPY infra/compose/docker-compose.yml infra/compose/init-db.sql /tmp/fair-src/infra/compose/
+COPY stacks/compose.yaml /tmp/fair-src/stacks/
+COPY data/sample /tmp/fair-src/data/sample
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install hatchling hatch-vcs
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -65,6 +70,9 @@ RUN uv python install 3.13
 WORKDIR /app
 COPY pyproject.toml README.md fair_zenml_patch.pth /tmp/fair-src/
 COPY fair /tmp/fair-src/fair
+COPY infra/compose/docker-compose.yml infra/compose/init-db.sql /tmp/fair-src/infra/compose/
+COPY stacks/compose.yaml /tmp/fair-src/stacks/
+COPY data/sample /tmp/fair-src/data/sample
 RUN --mount=type=cache,target=/root/.cache/uv \
     export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 && \
     uv venv && uv pip install \
