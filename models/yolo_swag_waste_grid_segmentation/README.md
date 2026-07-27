@@ -1,53 +1,106 @@
 # YOLO Solid Waste Grid Segmentation (SWAG)
 
-SWAG maps openly dumped solid waste in georeferenced, very-high-resolution RGB aerial or UAV imagery. It divides the input mosaic into 5 m × 5 m cells and classifies each cell as `waste` or `background`; inference returns those cells as GeoJSON polygons in EPSG:4326. It is intended for screening and prioritising areas for review, rather than for tracing the exact boundary or volume of a waste pile.
+## Overview
 
-For more information please checkout the training repository: [YOLO Solid Waste Assessment on Grids (SWAG)
-](https://github.com/GIScience/solid-waste-detection-for-fAIr/tree/main)
-## Summary
+SWAG screens , georeferenced, very-high-resolution RGB aerial or UAV imagery for visible, openly dumped solid waste. It classifies 5 m × 5 m cells as `waste` or `background` and returns the cells as GeoJSON for review. The pretrained model covers urban and peri-urban settings from 60 globally distributed OpenAerialMap scenes; fine-tune it before use in a geography or imagery setting that is not well represented by that data.
 
-| | |
-| --- | --- |
-| Task | Grid-based solid-waste mapping |
-| Input | Georeferenced three-band RGB GeoTIFF chips (`.tif` or `.tiff`) |
-| Output | GeoJSON `FeatureCollection` of 5 m × 5 m grid-cell polygons with `cell_id`, `label`, and `confidence` |
-| Classes | `background`, `waste` |
-| Coverage | 60 globally distributed OpenAerialMap (OAM) scenes |
-| Licence | MIT |
+## Pretrained source
 
-## Architecture and data preparation
+The pretrained weights, labels, and preparation utilities come from the [YOLO Solid Waste Assessment on Grids source repository](https://github.com/GIScience/solid-waste-detection-for-fAIr). Its training data comprises 60 OpenAerialMap scenes; the source repository is released under the MIT License. The model is based on the accompanying [SWAG preprint](https://doi.org/10.48550/arXiv.2605.02316). Review the licence of each source image before reusing training imagery.
 
-The model is a two-class YOLO26x classification model. RGB cell chips are resized to 128 × 128 pixels for the model; the spatial grid and GeoJSON polygons are created by the pipeline before and after classification.
+## Training coverage and examples
 
-Fine-tuning starts with a mosaic of the supplied imagery and a GeoJSON or GeoPackage label file. Features with `label = 1` mark waste. Features with `label = 0` may explicitly mark background; when they are absent, the pipeline deterministically samples an equal number of no-waste cells. A cell is labelled `waste` when at least 80% of its area is covered by a waste label, then each class is split into train and validation sets.
+The pretrained SWAG dataset covers geographically diverse OpenAerialMap scenes. The map below shows the source training-scene distribution.
 
-The pretrained checkpoint, annotation utilities, OAM collection script, grid-generation script, cropper, and dataset merge/re-split scripts originate in the [SWAG source repository](https://github.com/GIScience/solid-waste-detection-for-fAIr). The source repository is MIT-licensed; its [checkpoint](https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.pt) is the base model used by this pipeline.
+[![World map of SWAG training-scene locations](https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/Overview.png)](https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/Overview.png)
+
+The following examples show 5 m grid-cell waste overlays in different settings. Select an image to view it at full size.
+
+| Riverbank setting | Open-site setting | Built-up setting |
+| --- | --- | --- |
+| [![Waste grid cells along a riverbank](https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/example_senegal.png)](https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/example_senegal.png) | [![Waste grid cells at an open site](https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/example.png)](https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/example.png) | [![Waste grid cells in a built-up area](https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/example_buildings.png)](https://github.com/GIScience/solid-waste-detection-for-fAIr/blob/dc826f335b5403ed8161f0b6f5656e89aae9b2b8/data/images/example_buildings.png) |
+
+Images are from the [SWAG source repository](https://github.com/GIScience/solid-waste-detection-for-fAIr) and are pinned to its source commit for reproducibility.
+
+## Architecture
+
+SWAG is a two-class YOLO26x classifier. The published ONNX model accepts one RGB grid cell as a `1 × 3 × 128 × 128` `float32` tensor and returns `1 × 2` class scores for `background` and `waste`. The pipeline creates the spatial grid before classification and restores the grid-cell geometry in the GeoJSON output.
+
+Fine-tuning starts with a mosaic of the supplied imagery and a GeoJSON or GeoPackage label file. Features with `label = 1` mark waste. Features with `label = 0` may explicitly mark background; when they are absent, the pipeline deterministically samples an equal number of no-waste cells, which has to be treated with care and expects a full coverage of labeled waste pile in a training area. A cell is labelled `waste` when at least 80% of its area is covered by a waste label, then each class is split into train and validation sets.
+
+### Labeling guidance
+
+- **Define the positive class consistently.** Label only exposed, openly dumped waste that forms a clearly defined, densely covered area: visible waste should cover about 80% or more of the area being labelled. Do not label sparse, ambiguous, or mostly occluded material as a waste pile.
+- **Prioritise variety and spatial coverage.** Select waste piles with varied appearance, material, size, and setting, and distribute them as evenly as practical across the training area. This reduces the chance that the model learns one location, background, or pile type rather than waste itself.
+- **Handle very large piles selectively.** You may label smaller, representative parts of a very large pile instead of its full extent. The pipeline converts the selected geometry into 5 m × 5 m training cells and then splits those cells into training and validation sets.
+- **Adapt the overlap threshold for very small piles.** The default `waste_overlap_threshold` is `0.8`, so a waste polygon must cover at least 80% of a 5 m grid cell for that cell to become a positive training example. If the imagery contains many genuine but very small piles, lowering this hyperparameter can retain more useful positive cells. Treat this as a deliberate local-data choice: a lower threshold also makes each positive cell less visually pure.
+- **Add hard-negative backgrounds explicitly.** Use `label = 0` for representative background areas, especially features likely to cause false positives: visually noisy vegetation, rubble, beaches, mosaic or patterned ground surfaces, bright water-reflection artefacts, building materials, and clothes laid out to dry. Include ordinary clean background as well, but do not mass-label unreviewed cells.
+
+The [extra-large checkpoint](https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/9f62fd1e4de6905a38620c195a6e62bcef280956/data/checkpoint/checkpoint_v1_extra_large.pt) is the pinned base model used by this pipeline.
+
+### Model size
+
+- **Parameters:** 28.33 M
+- **Compute:** 2.21 GMACs (about 4.41 GFLOPs, counting one multiply-add as two FLOPs) per cell
+- **Inference input:** fixed batch-1 `float32` tensor of `1 × 3 × 128 × 128`; inference runs one 5 m cell at a time
+- **CPU inference:** about 11.7 ms per cell
+- **Memory and benchmark host:** about ~ 381 MiB  memory usage after model warm-up; Intel Core Ultra 7 255H (16 logical CPUs), CPU ONNX Runtime
 
 ## Intended use
 
-Use SWAG with north-up, georeferenced RGB imagery where a 5 m ground grid is meaningful. Typical uses are rapid, area-wide screening of urban or peri-urban imagery, producing candidate waste cells for human review, and fine-tuning from local vector annotations when imagery or waste appearance differs from the pretrained scenes.
+**Target:** visible, openly dumped solid waste in georeferenced, very-high-resolution RGB aerial or UAV imagery. SWAG is intended to screen an urban or peri-urban area and show eg. where a reviewer should look more closely. Fine-tune it with local labels when the imagery or the appearance of waste differs from the training data.
 
-The `confidence` property is the model's waste-class probability for a grid cell. A `waste` cell identifies a location requiring review; it is not a precise waste-pile footprint, a material classification, or an estimate of mass or volume.
+Each output feature is one 5 m × 5 m grid cell by default (`cell_size_m` can change this size):
+
+| Output part | Meaning |
+| --- | --- |
+| Geometry | The geographic extent of the grid cell in WGS84—not the boundary of a waste pile. |
+| `cell_id` | The cell's identifier within this inference run. |
+| `label` | `waste` when the waste confidence meets the selected threshold; otherwise `background`. A `waste` label means the cell is a candidate for review, not that all of the cell is waste. |
+| `confidence` | The model's estimated probability, from 0 to 1, that the cell contains the target waste class. |
+
+SWAG does not identify waste material types, trace exact pile boundaries, or estimate waste mass or volume.
 
 ## Limitations
 
-- The model only supports three-band RGB imagery. Multispectral, SAR, DEM, grayscale, and non-georeferenced inputs are outside its supported input contract.
 - Results depend on image quality, ground sampling distance, illumination, occlusion, and whether local waste appearance resembles the OAM training scenes. Local fine-tuning is recommended before operational use in a new geography or sensor setting.
 - The fixed 5 m grid trades boundary detail for consistent area coverage. A positive cell can include both waste and non-waste land, and small piles can be missed when they do not cover the configured threshold of a cell.
 - Tile zoom is not a fixed ground resolution: metres per pixel vary with latitude, and an OAM service can resample imagery beyond its native resolution. The serving runtime currently accepts its global zoom range without enforcing this model's STAC zoom metadata. Check the source imagery's native ground sampling distance and the number of native pixels per 5 m cell before relying on a prediction.
 - Background sampling and the validation split are stratified by cell, not by independent field campaign. Reported accuracy should therefore not be interpreted as a guarantee of performance in another area.
 - Predictions should be reviewed by a domain expert before publication, enforcement, or resource-allocation decisions.
 
-## How to use
+## Usage
 
-For the full local fAIr workflow, run `just example yolo_swag_waste_grid_segmentation` after setting up the compose stack; this registers the model, fine-tunes it, promotes the resulting ONNX model, and runs prediction. Then run `just test-serve yolo_swag_waste_grid_segmentation` to build the inference image and make a live prediction request against the OAM test area.
+### Zoom Level
 
-Direct inference accepts one GeoTIFF or a directory of GeoTIFFs plus the required `confidence_threshold` parameter (default `0.5`). The optional `cell_size_m` parameter defaults to `5.0`. The result is a GeoJSON `FeatureCollection`; every emitted feature has a WGS84 polygon and the `cell_id`, `label`, and `confidence` properties described above.
+As we deal with accumulations of smaller Objects, it is strongly encouraged to use the finest available zoom level for your imagery and stick to the recommended zoom level of 22. 
+
+### Training parameters
+
+| Parameter                 | Default | Use                                                                                                                                                                                 |
+|---------------------------|--------:|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `epochs`                  |     `5` | Number of fine-tuning passes through the training data.                                                                                                                             |
+| `batch_size`              |     `4` | Number of cells per training update; increase it only when GPU memory permits. It does not affect inference.                                                                        |
+| `learning_rate`           | `0.001` | Optimizer step size; reduce it when fine-tuning becomes unstable.                                                                                                                   |
+| `freeze_layers`           |  `10` | Number of first YOLO layers to freeze. Use `0` to freeze none; a larger value freezes more pretrained layers, which can help when fine-tuning data are limited. |
+| `waste_overlap_threshold` |   `0.8` | Minimum waste-label coverage required for a 5 m cell to become a positive training example. Usefull to lower if alot of smaller waste piles have been labeled                       |
+| `cell_size_m`             |   `5.0` | Training-grid edge length in metres; keep it at `5.0` unless deliberately retraining for another spatial scale.                                                                     |
+
+`optimizer` (`AdamW`), `scheduler` (`cosine`), `weight_decay` (`0.0001`), and `val_ratio` (`0.2`) are also configurable; their defaults are appropriate for the supplied fine-tuning workflow.
+
+### Inference parameters
+
+| Parameter | Default | Use |
+| --- | ---: | --- |
+| `confidence_threshold` | `0.5` | Required threshold for assigning `waste`: raise it to reduce false positives, or lower it to find more candidate cells. |
+| `cell_size_m` | `5.0` | Inference-grid edge length in metres. Smaller cells give a denser output grid and require more model calls; use the training value unless there is a clear reason to change it. |
+
+Inference is fixed at batch 1; there is no inference `batch_size` setting.
 
 ## Citation
 
 If you use this model or its pretrained weights, cite [*Open-access model for detecting openly dumped dispersed municipal solid waste from crowdsourced UAV imagery in Sub-Saharan Africa*](https://doi.org/10.48550/arXiv.2605.02316).
 
-## Licence
+## License
 
 SWAG is released under the [MIT License](https://spdx.org/licenses/MIT.html). The accompanying data-preparation source repository is also MIT-licensed by the GIScience Research Group and HeiGIT.
