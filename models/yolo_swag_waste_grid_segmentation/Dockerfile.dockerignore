@@ -7,3 +7,12 @@
 !fair_zenml_patch.pth
 !models/conftest.py
 !models/test_integration.py
+!infra/
+!infra/compose/
+!infra/compose/docker-compose.yml
+!infra/compose/init-db.sql
+!stacks/
+!stacks/compose.yaml
+!data/
+!data/sample/
+!data/sample/**
