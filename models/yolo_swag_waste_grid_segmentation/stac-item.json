@@ -60,6 +60,9 @@
     "mlm:pretrained_source": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.pt",
     "mlm:accelerator": "cuda",
     "mlm:accelerator_count": 1,
+    "fair:recommended_zoom": 22,
+    "fair:min_zoom": 20,
+    "fair:max_zoom": 22,
     "keywords": [
       "solid-waste",
       "semantic-segmentation",
@@ -300,6 +303,27 @@
         "mlm:weights"
       ],
       "mlm:artifact_type": "torch.save",
+      "raster:bands": [
+        {
+          "name": "red"
+        },
+        {
+          "name": "green"
+        },
+        {
+          "name": "blue"
+        }
+      ]
+    },
+    "model": {
+      "href": "https://media.githubusercontent.com/media/GIScience/solid-waste-detection-for-fAIr/main/data/checkpoint/checkpoint_v1.onnx",
+      "title": "Portable YOLO26x-cls ONNX inference model",
+      "type": "application/octet-stream; framework=onnx",
+      "roles": [
+        "mlm:model",
+        "mlm:compiled"
+      ],
+      "mlm:artifact_type": "onnx",
       "raster:bands": [
         {
           "name": "red"
