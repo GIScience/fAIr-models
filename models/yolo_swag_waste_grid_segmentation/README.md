@@ -26,15 +26,16 @@ Images are from the [SWAG source repository](https://github.com/GIScience/solid-
 
 SWAG is a two-class YOLO26x classifier. The published ONNX model accepts one RGB grid cell as a `1 × 3 × 128 × 128` `float32` tensor and returns `1 × 2` class scores for `background` and `waste`. The pipeline creates the spatial grid before classification and restores the grid-cell geometry in the GeoJSON output.
 
-Fine-tuning starts with a mosaic of the supplied imagery and a GeoJSON or GeoPackage label file. Features with `label = 1` mark waste. Features with `label = 0` may explicitly mark background; when they are absent, the pipeline deterministically samples an equal number of no-waste cells, which has to be treated with care and expects a full coverage of labeled waste pile in a training area. A cell is labelled `waste` when at least 80% of its area is covered by a waste label, then each class is split into train and validation sets.
+Fine-tuning starts with a mosaic of the supplied imagery and a GeoJSON or GeoPackage label file. Features with `label = 1` mark waste and features with `label = 0` mark reviewed background; both are required. A cell is labelled `waste` when at least 80% of its area is covered by a waste label. All cells from one source label polygon stay together in train, validation, or test.
+
 
 ### Labeling guidance
 
 - **Define the positive class consistently.** Label only exposed, openly dumped waste that forms a clearly defined, densely covered area: visible waste should cover about 80% or more of the area being labelled. Do not label sparse, ambiguous, or mostly occluded material as a waste pile.
-- **Prioritise variety and spatial coverage.** Select waste piles with varied appearance, material, size, and setting, and distribute them as evenly as practical across the training area. This reduces the chance that the model learns one location, background, or pile type rather than waste itself.
-- **Handle very large piles selectively.** You may label smaller, representative parts of a very large pile instead of its full extent. The pipeline converts the selected geometry into 5 m × 5 m training cells and then splits those cells into training and validation sets.
+- **Prioritise variety and spatial coverage.** Select waste piles with varied appearance, material, size, and setting, and distribute them as evenly as practical across the training area. Train, validation, and test are assigned by source polygon, so provide enough separate waste and background polygons to populate all three splits.
+- **Handle very large piles selectively.** You may label smaller, representative parts of a very large pile instead of its full extent. The pipeline converts the selected geometry into 5 m × 5 m training cells and keeps all cells from each selected polygon in one split.
 - **Adapt the overlap threshold for very small piles.** The default `waste_overlap_threshold` is `0.8`, so a waste polygon must cover at least 80% of a 5 m grid cell for that cell to become a positive training example. If the imagery contains many genuine but very small piles, lowering this hyperparameter can retain more useful positive cells. Treat this as a deliberate local-data choice: a lower threshold also makes each positive cell less visually pure.
-- **Add hard-negative backgrounds explicitly.** Use `label = 0` for representative background areas, especially features likely to cause false positives: visually noisy vegetation, rubble, beaches, mosaic or patterned ground surfaces, bright water-reflection artefacts, building materials, and clothes laid out to dry. Include ordinary clean background as well, but do not mass-label unreviewed cells.
+- **Add reviewed background polygons.** `label = 0` background polygons are required and are split as complete source polygons, just like waste. Include representative hard negatives—visually noisy vegetation, rubble, beaches, mosaic or patterned ground surfaces, bright water-reflection artefacts, building materials, and clothes laid out to dry—along with ordinary clean background. Do not mass-label unreviewed cells.
 
 The [extra-large checkpoint](https://raw.githubusercontent.com/GIScience/solid-waste-detection-for-fAIr/9f62fd1e4de6905a38620c195a6e62bcef280956/data/checkpoint/checkpoint_v1_extra_large.pt) is the pinned base model used by this pipeline.
 
@@ -66,7 +67,7 @@ SWAG does not identify waste material types, trace exact pile boundaries, or est
 - Results depend on image quality, ground sampling distance, illumination, occlusion, and whether local waste appearance resembles the OAM training scenes. Local fine-tuning is recommended before operational use in a new geography or sensor setting.
 - The fixed 5 m grid trades boundary detail for consistent area coverage. A positive cell can include both waste and non-waste land, and small piles can be missed when they do not cover the configured threshold of a cell.
 - Tile zoom is not a fixed ground resolution: metres per pixel vary with latitude, and an OAM service can resample imagery beyond its native resolution. The serving runtime currently accepts its global zoom range without enforcing this model's STAC zoom metadata. Check the source imagery's native ground sampling distance and the number of native pixels per 5 m cell before relying on a prediction.
-- Background sampling and the validation split are stratified by cell, not by independent field campaign. Reported accuracy should therefore not be interpreted as a guarantee of performance in another area.
+- Grouping cells by source polygon reduces leakage between splits, but it is not an independent field campaign. Reported accuracy should not be interpreted as a guarantee of performance in another area.
 - Predictions should be reviewed by a domain expert before publication, enforcement, or resource-allocation decisions.
 
 ## Usage
@@ -83,10 +84,12 @@ As we deal with accumulations of smaller Objects, it is strongly encouraged to u
 | `batch_size`              |     `4` | Number of cells per training update; increase it only when GPU memory permits. It does not affect inference.                                                                        |
 | `learning_rate`           | `0.001` | Optimizer step size; reduce it when fine-tuning becomes unstable.                                                                                                                   |
 | `freeze_layers`           |  `10` | Number of first YOLO layers to freeze. Use `0` to freeze none; a larger value freezes more pretrained layers, which can help when fine-tuning data are limited. |
+| `val_ratio`               |   `0.1` | Target fraction of source label-polygon groups reserved for validation. |
+| `test_ratio`              |   `0.1` | Target fraction of source label-polygon groups reserved for final evaluation. |
 | `waste_overlap_threshold` |   `0.8` | Minimum waste-label coverage required for a 5 m cell to become a positive training example. Usefull to lower if alot of smaller waste piles have been labeled                       |
 | `cell_size_m`             |   `5.0` | Training-grid edge length in metres; keep it at `5.0` unless deliberately retraining for another spatial scale.                                                                     |
 
-`optimizer` (`AdamW`), `scheduler` (`cosine`), `weight_decay` (`0.0001`), and `val_ratio` (`0.2`) are also configurable; their defaults are appropriate for the supplied fine-tuning workflow.
+`optimizer` (`AdamW`), `scheduler` (`cosine`), `weight_decay` (`0.0001`), and `sample_fraction` (`1.0`) are also configurable; their defaults are appropriate for the supplied fine-tuning workflow.
 
 ### Inference parameters
 
@@ -101,6 +104,7 @@ Inference is fixed at batch 1; there is no inference `batch_size` setting.
 
 If you use this model or its pretrained weights, cite [*Open-access model for detecting openly dumped dispersed municipal solid waste from crowdsourced UAV imagery in Sub-Saharan Africa*](https://doi.org/10.48550/arXiv.2605.02316).
 
+In addtion a citation of the global sourced training data [*Global YOLO SWAG *](https://zenodo.org/records/21874456) is welcome. 
 ## License
 
 SWAG is released under the [MIT License](https://spdx.org/licenses/MIT.html). The accompanying data-preparation source repository is also MIT-licensed by the GIScience Research Group and HeiGIT.

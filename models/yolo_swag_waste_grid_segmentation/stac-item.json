@@ -47,7 +47,7 @@
     "datetime": "2024-01-01T00:00:00Z",
     "created": "2026-07-20T00:00:00Z",
     "updated": "2026-07-20T00:00:00Z",
-    "title": "YOLO Solid Waste Analysis on spatial Grids",
+    "title": "Solid Waste Detection",
     "description": "A grid-based semantic-segmentation model that classifies 5 m x 5 m UAV-imagery cells as background or waste. The classifier is pretrained on 60 globally distributed OpenAerialMap scenes.",
     "mlm:name": "yolo-swag-waste-grid-segmentation",
     "mlm:architecture": "yolo26xcls",

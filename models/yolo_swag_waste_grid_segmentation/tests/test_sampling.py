@@ -1,7 +1,5 @@
 """Tests for the deterministic chip subset used by data-preparation steps."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

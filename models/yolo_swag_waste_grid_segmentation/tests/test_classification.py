@@ -1,7 +1,5 @@
 """Unit tests for the grid-cell labeling rules used before training."""
 
-from __future__ import annotations
-
 import geopandas as gpd
 import pytest
 from shapely.geometry import box

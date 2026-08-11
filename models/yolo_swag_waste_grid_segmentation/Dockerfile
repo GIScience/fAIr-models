@@ -3,9 +3,10 @@ FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS builder
 ENV UV_SYSTEM_PYTHON=1 UV_LINK_MODE=copy
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libgdal-dev gdal-bin libgl1 libglib2.0-0 \
+    libexpat1 libgdal36 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+ARG FAIR_PY_OPS_VERSION=0.3.5
 COPY pyproject.toml README.md fair_zenml_patch.pth /tmp/fair-src/
 COPY fair /tmp/fair-src/fair
 
@@ -17,22 +18,22 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install hatchling hatch-vcs
 RUN --mount=type=cache,target=/root/.cache/uv \
     python -m pip install \
-    --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.10.0+cpu \
-    torchvision==0.25.0+cpu
+    --index-url https://download.pytorch.org/whl/cu126 \
+    torch==2.10.0\
+    torchvision==0.25.0
 RUN --mount=type=cache,target=/root/.cache/uv \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
     uv pip install \
     --no-build-isolation \
     "ultralytics>=8.4.0" \
-    rasterio \
-    pyproj \
-    geopandas \
+    rasterio==1.4.4 \
+    pyproj==3.7.2 \
+    geopandas==1.1.2 \
     shapely \
     Pillow \
     onnx \
     onnxscript \
-    /tmp/fair-src[k8s,serve]
+    "fair-py-ops[k8s,serve]==${FAIR_PY_OPS_VERSION}"
 
 # Runtime stage: minimal image
 FROM python:3.13-slim-trixie AS runtime
@@ -40,7 +41,7 @@ FROM python:3.13-slim-trixie AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git libexpat1 libgdal36 gdal-bin libgl1 libglib2.0-0 \
+    libexpat1 libgdal36 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
@@ -77,7 +78,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 && \
     uv venv && uv pip install \
     /tmp/fair-src[serve] \
-    rasterio \
+    rasterio\
     pyproj \
     numpy \
     Pillow

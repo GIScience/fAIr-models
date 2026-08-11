@@ -118,8 +118,6 @@ def predict(session: Any, input_images: str, params: dict[str, Any]) -> dict[str
 
     from fair.utils.data import resolve_directory
 
-    if "confidence_threshold" not in params:
-        raise ValueError("params['confidence_threshold'] is required")
     confidence_threshold = float(params["confidence_threshold"])
     cell_size_m = float(params.get("cell_size_m", CELL_SIZE_M))
     input_name = session.get_inputs()[0].name
@@ -228,26 +226,36 @@ def _subset_chips_dir(chips_path: str, fraction: float) -> str:
 
 
 def pick_utm_crs(lon: float, lat: float):
-    from rasterio.crs import CRS
+    import geopandas as gpd
 
-    zone = int((lon + 180) // 6) + 1
-    epsg = (32600 if lat >= 0 else 32700) + zone
-    return CRS.from_epsg(epsg)
+    gdf = gpd.GeoSeries(gpd.points_from_xy([lon], [lat]), crs="EPSG:4326")
+    return gdf.estimate_utm_crs()
 
 
 def build_mosaic(chip_paths: list[Path]) -> Path:
-    import subprocess
+    import rasterio
+    from rasterio.merge import merge
 
     out_dir = Path(tempfile.mkdtemp(prefix="yolo_cls_mosaic_"))
-    vrt_path = out_dir / "mosaic.vrt"
-    filelist = out_dir / "chips.txt"
-    filelist.write_text("\n".join(str(p) for p in chip_paths))
-    subprocess.run(
-        ["gdalbuildvrt", "-input_file_list", str(filelist), str(vrt_path)],
-        check=True,
-        capture_output=True,
+    out_path = out_dir / "mosaic.tif"
+
+    with rasterio.open(chip_paths[0]) as ref:
+        profile = ref.profile
+
+    merge(
+        [str(p) for p in chip_paths],
+        dst_path=str(out_path),
+        dst_kwds={
+            **profile,
+            "driver": "GTiff",
+            "tiled": True,
+            "blockxsize": 512,
+            "blockysize": 512,
+            "compress": "deflate",
+        },
+        mem_limit=512,
     )
-    return vrt_path
+    return out_path
 
 
 def load_labels(labels_path: Path, target_crs):
@@ -606,11 +614,11 @@ def train_model(
     learning_rate = hyperparameters.get("learning_rate", 0.001)
     weight_decay = hyperparameters.get("weight_decay", 0.0001)
     optimizer = hyperparameters.get("optimizer", "AdamW")
-    scheduler = hyperparameters.get("scheduler", "cosine")
+    use_cos_scheduler = hyperparameters.get("scheduler", "cosine")
     freeze_layers = hyperparameters.get("freeze_layers", 10)
 
-    if scheduler not in {"cosine", "none"}:
-        msg = "scheduler must be 'cosine' or 'none'"
+    if use_cos_scheduler not in {"cosine", "none"}:
+        msg = "use_cos_scheduler must be 'cosine' or 'none'"
         raise ValueError(msg)
 
     yolo_dir = _resolve_yolo_dir_for_step(
@@ -641,7 +649,7 @@ def train_model(
             weight_decay=weight_decay,
             optimizer=optimizer,
             freeze=freeze_layers,
-            cos_lr=scheduler == "cosine",
+            cos_lr=use_cos_scheduler == "cosine",
             verbose=False,
         )
         if results and hasattr(results, "results_dict"):

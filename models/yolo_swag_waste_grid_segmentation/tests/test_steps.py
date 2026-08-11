@@ -5,8 +5,6 @@ are background.  Together, these tests describe the normal pipeline flow:
 split data, train a classifier, evaluate it, then export and use it.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 
