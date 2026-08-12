@@ -242,6 +242,8 @@ def build_mosaic(chip_paths: list[Path]) -> Path:
     with rasterio.open(chip_paths[0]) as ref:
         profile = ref.profile
 
+    photometric = "rgb" if profile.get("count", 1) >= 3 else "minisblack"
+
     merge(
         [str(p) for p in chip_paths],
         dst_path=str(out_path),
@@ -252,6 +254,7 @@ def build_mosaic(chip_paths: list[Path]) -> Path:
             "blockxsize": 512,
             "blockysize": 512,
             "compress": "deflate",
+            "photometric": photometric,
         },
         mem_limit=512,
     )
@@ -280,16 +283,19 @@ def load_labels_merged(labels_path: Path, target_crs):
 
 
 def split_cells(cells, source_polygons, val_ratio: float, test_ratio: float, seed: int) -> dict[int, str]:
-    """Split complete source label-polygon groups."""
-    groups_by_polygon: dict[int, list[int]] = {}
-    for cell_id, cell in cells.iterrows():
-        overlap = source_polygons.geometry.intersection(cell.geometry).area
-        if overlap.max() <= 0:
-            msg = "Selected cells must overlap a source label polygon"
-            raise ValueError(msg)
-        polygon_id = int(overlap.idxmax())
-        groups_by_polygon.setdefault(polygon_id, []).append(cell_id)
-    groups = list(groups_by_polygon.values())
+    """Split complete source label-polygon groups; splits per-cell if there are no source polygons to group by."""
+    if source_polygons.empty:
+        groups = [[cell_id] for cell_id in cells.index]
+    else:
+        groups_by_polygon: dict[int, list[int]] = {}
+        for cell_id, cell in cells.iterrows():
+            overlap = source_polygons.geometry.intersection(cell.geometry).area
+            if overlap.max() <= 0:
+                msg = "Selected cells must overlap a source label polygon"
+                raise ValueError(msg)
+            polygon_id = int(overlap.idxmax())
+            groups_by_polygon.setdefault(polygon_id, []).append(cell_id)
+        groups = list(groups_by_polygon.values())
 
     random.Random(seed).shuffle(groups)
     val_count = round(len(groups) * val_ratio)
@@ -480,10 +486,7 @@ def _prepare_yolo_classification_dataset(
             raise ValueError(msg)
         waste_union = waste_polygons.geometry.union_all()
         background_polygons = label_polygons[label_polygons["label"] == 0]
-        if background_polygons.empty:
-            msg = "At least one label=0 background polygon is required"
-            raise ValueError(msg)
-        background_union = background_polygons.geometry.union_all()
+        background_union = None if background_polygons.empty else background_polygons.geometry.union_all()
         grid = classify_cells(
             grid,
             waste_union,
