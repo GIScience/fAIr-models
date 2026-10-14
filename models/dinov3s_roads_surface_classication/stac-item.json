@@ -86,8 +86,13 @@
     "fair:metrics_spec": [
       {
         "key": "fair:accuracy",
-        "name": "Predicted Accuracy",
-        "description": "TODO"
+        "name": "Test Accuracy",
+        "description": "Share of test roads classified correctly (one fixed, unaugmented bag per road)."
+      },
+      {
+        "key": "fair:loss",
+        "name": "Test Loss",
+        "description": "Class-weighted cross-entropy on the test roads."
       }
     ],
     "mlm:input": [
@@ -161,8 +166,16 @@
     "mlm:hyperparameters": {
       "training.epochs": 1,
       "training.val_ratio": 0.2,
+      "training.test_ratio": 0.2,
+      "training.val_every": 20,
       "training.split_seed": 42,
       "training.block_size_m": 100.0,
+      "training.steps": 200,
+      "training.learning_rate": 0.001,
+      "training.gate_accuracy": 0.9,
+      "training.replay_bags_per_step": 20,
+      "training.encoder_uri": "TODO: HTTPS URL of encoder.pt",
+      "training.replay_bank_uri": "TODO: HTTPS URL of replay_bank_2000_features.pt",
       "inference.confidence_threshold": 0.5
     },
     "fair:split_spec": {
@@ -170,7 +183,7 @@
       "default_ratio": 0.2,
       "seed": 42,
       "block_size_m": 100.0,
-      "description": "Spatial block split by road: roads are grouped into block_size_m grid blocks (UTM) by their centroid and whole blocks go to val in seeded order until it holds about default_ratio of the roads. A single block falls back to a random split by road. Not stratified by class."
+      "description": "Spatial block split by road: roads are grouped into block_size_m grid blocks (UTM) by their centroid; in seeded block order, test gets about test_ratio and val about default_ratio of the roads, the rest is train, each at least one block. Fewer than 3 blocks fall back to a random split by road. Not stratified by class."
     },
     "fair:hyperparameters_spec": [
       {
@@ -198,12 +211,72 @@
         "description": "Seed of the block order in the spatial split."
       },
       {
+        "key": "test_ratio",
+        "type": "float",
+        "default": 0.2,
+        "min": 0.05,
+        "max": 0.5,
+        "description": "Share of the labelled roads held out as test; used only by evaluate_model."
+      },
+      {
+        "key": "val_every",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 2000,
+        "description": "Steps between validation runs on the val roads during fine-tuning."
+      },
+      {
         "key": "block_size_m",
         "type": "float",
         "default": 100.0,
         "min": 10.0,
         "max": 5000.0,
         "description": "Side length in metres of the grid blocks that keep neighbouring roads on one side of the split; larger blocks = stronger spatial separation, fewer blocks to split."
+      },
+      {
+        "key": "steps",
+        "type": "int",
+        "default": 200,
+        "min": 1,
+        "max": 2000,
+        "description": "Fine-tuning steps of the classifier head; each step sees every train road once plus replay bags."
+      },
+      {
+        "key": "learning_rate",
+        "type": "float",
+        "default": 0.001,
+        "min": 0.0001,
+        "max": 0.01,
+        "description": "Constant AdamW learning rate of the classifier head (backbone and attention pool are frozen)."
+      },
+      {
+        "key": "gate_accuracy",
+        "type": "float",
+        "default": 0.9,
+        "min": 0.0,
+        "max": 1.01,
+        "description": "Base-model accuracy on all labelled roads of the scene (train, val and test) at or above which fine-tuning is skipped and the base model is returned."
+      },
+      {
+        "key": "replay_bags_per_step",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 100,
+        "description": "Replay bank bags (half per class) mixed into every step, so the head keeps working on the base training scenes."
+      },
+      {
+        "key": "encoder_uri",
+        "type": "str",
+        "default": "TODO: HTTPS URL of encoder.pt",
+        "description": "Fine-tuned DINOv3 ViT-S/16 encoder state_dict (DINOv3 License); loaded with the base head."
+      },
+      {
+        "key": "replay_bank_uri",
+        "type": "str",
+        "default": "TODO: HTTPS URL of replay_bank_2000_features.pt",
+        "description": "Replay bank of per-patch encoder features from the base model's training scenes (2000 bags)."
       },
       {
         "key": "confidence_threshold",
