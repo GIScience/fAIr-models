@@ -159,67 +159,27 @@
       }
     },
     "mlm:hyperparameters": {
-      "training.epochs": 15,
-      "training.batch_size": 8,
-      "training.learning_rate": 5e-5,
-      "training.weight_decay": 0.01,
+      "training.epochs": 1,
       "training.val_ratio": 0.2,
       "training.split_seed": 42,
-      "training.block_size": 4,
-      "training.inner_val_frac": 0.1,
-      "training.freeze_encoder": true,
-      "training.norm_stats": "hot_global",
-      "training.tune_postprocess_trials": 30,
-      "training.sample_fraction": 1.0,
-      "inference.confidence_threshold": 0.4371,
-      "inference.simplify_m": 0.9626,
-      "inference.regularize_area_threshold": 0.4949,
-      "inference.regularize_overlap_tol_m2": 3.9251,
-      "inference.min_area_m2": 2.6465,
-      "inference.seed_min_distance": 6,
-      "inference.large_blob_area_px": 1500,
-      "inference.h_maxima_depth": 0.2,
-      "inference.sliding_stride": 256
+      "training.block_size_m": 100.0,
+      "inference.confidence_threshold": 0.5
     },
     "fair:split_spec": {
       "strategy": "spatial",
       "default_ratio": 0.2,
       "seed": 42,
-      "block_size": 4,
-      "description": "Spatial block split on OAM-x-y-z tile coords: chips grouped into (x // block_size, y // block_size) blocks, whole blocks assigned to train or val. Non-OAM filenames fall back to a seeded random split."
+      "block_size_m": 100.0,
+      "description": "Spatial block split by road: roads are grouped into block_size_m grid blocks (UTM) by their centroid and whole blocks go to val in seeded order until it holds about default_ratio of the roads. A single block falls back to a random split by road. Not stratified by class."
     },
     "fair:hyperparameters_spec": [
       {
         "key": "epochs",
         "type": "int",
-        "default": 15,
+        "default": 1,
         "min": 1,
-        "max": 500,
-        "description": "Decoder fine-tuning epochs"
-      },
-      {
-        "key": "batch_size",
-        "type": "int",
-        "default": 8,
-        "min": 1,
-        "max": 64,
-        "description": "Training batch size"
-      },
-      {
-        "key": "learning_rate",
-        "type": "float",
-        "default": 5e-5,
-        "min": 1e-7,
-        "max": 1.0,
-        "description": "AdamW learning rate (decoder only; encoder is frozen)"
-      },
-      {
-        "key": "weight_decay",
-        "type": "float",
-        "default": 0.01,
-        "min": 0.0,
-        "max": 1.0,
-        "description": "AdamW weight decay"
+        "max": 1,
+        "description": "Required by fAIr; the fine-tuning length is set by steps (step 2)."
       },
       {
         "key": "val_ratio",
@@ -227,7 +187,7 @@
         "default": 0.2,
         "min": 0.05,
         "max": 0.5,
-        "description": "Fraction of chips held out as spatial val. Blocks are added to val until this share of total chips is reached."
+        "description": "Share of each class's labelled roads held out for validation."
       },
       {
         "key": "split_seed",
@@ -235,124 +195,23 @@
         "default": 42,
         "min": 0,
         "max": 2147483647,
-        "description": "Seed for block ordering in the spatial split"
+        "description": "Seed of the block order in the spatial split."
       },
       {
-        "key": "block_size",
-        "type": "int",
-        "default": 4,
-        "min": 1,
-        "max": 32,
-        "description": "Side length (in TMS tile units) of the spatial block that holds adjacent chips together; larger blocks = stronger spatial separation, fewer blocks to split."
-      },
-      {
-        "key": "inner_val_frac",
+        "key": "block_size_m",
         "type": "float",
-        "default": 0.1,
-        "min": 0.05,
-        "max": 0.5,
-        "description": "Within-train holdout that upstream finetune uses for Lightning's per-epoch val_loss/val_iou and early stopping. Independent of the catalog-facing spatial val."
-      },
-      {
-        "key": "freeze_encoder",
-        "type": "bool",
-        "default": true,
-        "description": "Keep the DINOv3 encoder frozen (recommended)"
-      },
-      {
-        "key": "norm_stats",
-        "type": "str",
-        "default": "hot_global",
-        "values": ["hot_global", "dataset"],
-        "description": "Input normalisation source. 'hot_global' uses mean/std from the hotosm/vhr-building-segmentation dataset (matches pretraining). 'dataset' computes per-channel mean/std from the user's finetune chips, pick this when your imagery differs substantially from HOT global imagery."
+        "default": 100.0,
+        "min": 10.0,
+        "max": 5000.0,
+        "description": "Side length in metres of the grid blocks that keep neighbouring roads on one side of the split; larger blocks = stronger spatial separation, fewer blocks to split."
       },
       {
         "key": "confidence_threshold",
         "type": "float",
-        "default": 0.4371,
-        "min": 0.0,
-        "max": 1.0,
-        "description": "Sigmoid threshold for building mask"
-      },
-      {
-        "key": "simplify_m",
-        "type": "float",
-        "default": 0.9626,
-        "min": 0.0,
-        "max": 10.0,
-        "description": "Douglas-Peucker tolerance in metres (EPSG:3857). 0 disables simplification."
-      },
-      {
-        "key": "regularize_area_threshold",
-        "type": "float",
-        "default": 0.4949,
-        "min": 0.0,
-        "max": 1.0,
-        "description": "Minimum polygon-area / MBR-area ratio for the rectangle-substitution step. Lower = more aggressive squaring of corners."
-      },
-      {
-        "key": "regularize_overlap_tol_m2",
-        "type": "float",
-        "default": 3.9251,
-        "min": 0.0,
-        "max": 100.0,
-        "description": "Maximum new neighbour overlap (m^2) allowed when substituting a polygon with its MBR. Keeps adjacent buildings from being merged."
-      },
-      {
-        "key": "min_area_m2",
-        "type": "float",
-        "default": 2.6465,
-        "min": 0.0,
-        "max": 1000.0,
-        "description": "Drop polygons smaller than this area (m^2). Filters specks from sub-pixel artefacts."
-      },
-      {
-        "key": "seed_min_distance",
-        "type": "int",
-        "default": 6,
-        "min": 1,
-        "max": 32,
-        "description": "Minimum pixel distance between watershed seeds picked from the predicted distance map. Larger values merge adjacent instances into a single building; smaller values split touching buildings more aggressively."
-      },
-      {
-        "key": "large_blob_area_px",
-        "type": "int",
-        "default": 1500,
-        "min": 200,
-        "max": 8000,
-        "description": "Connected-component area (pixels) above which a foreground blob is treated as large and split using distance-map h-maxima seeds instead of peak-local-max. Lower splits smaller merged clumps; higher leaves more touching buildings merged."
-      },
-      {
-        "key": "h_maxima_depth",
-        "type": "float",
-        "default": 0.2,
-        "min": 0.05,
-        "max": 0.5,
-        "description": "Prominence (normalised distance units) of the h-maxima used to seed watershed splits inside large blobs. Higher gives fewer, more confident splits (less over-segmentation); lower splits more aggressively."
-      },
-      {
-        "key": "sliding_stride",
-        "type": "int",
-        "default": 256,
-        "min": 64,
-        "max": 256,
-        "description": "Pixel step between 256x256 sliding windows at inference. Larger strides cut window count and latency; smaller strides overlap more (slower, marginally smoother stitching). The default 256 is tiling with no overlap; 192 is ~1.9x faster than 128 at near-identical F1."
-      },
-      {
-        "key": "tune_postprocess_trials",
-        "type": "int",
-        "default": 30,
-        "min": 0,
-        "max": 500,
-        "description": "Optuna trials run after training to find inference post-processing params that maximise F1 + 0.3 * mean_iou on the val set. Set to 0 to skip and use the catalog defaults. Requires at least 8 val chips; smaller val sets fall back to defaults with a warning."
-      },
-      {
-        "key": "sample_fraction",
-        "type": "float",
-        "default": 1.0,
-        "min": 0.001,
-        "max": 1.0,
-        "description": "Fraction of the train split actually loaded by the upstream dataloader (maps to dinov3_hot cfg.data_pct). Set to a small value in CI smoke runs to keep memory and time low. 1.0 uses everything."
+        "default": 0.5,
+        "min": 0.5,
+        "max": 0.99,
+        "description": "Below this softmax confidence a road is classed unknown."
       }
     ]
   },

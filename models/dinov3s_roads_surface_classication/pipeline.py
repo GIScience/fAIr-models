@@ -4,20 +4,48 @@ from typing import Annotated, Any
 
 from zenml import log_metadata, pipeline, step
 
-from fair.zenml.instrumentation import log_evaluation_results
 from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializer
 
 CLASS_NAMES = ("unpaved", "paved")
 
+LABEL_COLUMN = "label"
+SCENE_ID = "scene"
+MATERIALIZE_SEED = 0
 
-def _get_device() -> str:
-    import torch
-
-    if torch.backends.mps.is_available():
-        return "mps"
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
+PATCH_CONFIG_KWARGS = {
+    "patch_size_m": 15.0,
+    "patch_size_px": 256,
+    "meters_per_patch": 20.0,
+    "min_patches_per_road": 1,
+    "max_patches_per_road": 4,
+    "n_bags": 5,
+    "endpoint_margin_fraction": 0.1,
+    "junction_clearance_m": 7.5,
+    "lateral_jitter_m": 1.5,
+    "bearing_jitter_deg": 10.0,
+    "max_nodata_fraction": 0.1,
+    "max_attempts_per_patch": 10,
+    "fill_tolerance": 1,
+    "junction_exclude_highway_values": [
+        "footway",
+        "path",
+        "cycleway",
+        "steps",
+        "pedestrian",
+        "corridor",
+        "platform",
+        "bus_stop",
+        "crossing",
+        "give_way",
+        "stop",
+        "traffic_signals",
+        "traffic_mirror",
+        "street_lamp",
+        "milestone",
+        "emergency_access_point",
+        "construction",
+    ],
+}
 
 
 def _download_checkpoint(url: str) -> Path:
@@ -28,57 +56,11 @@ def _download_checkpoint(url: str) -> Path:
     return local_path
 
 
-def _log_yolo_loss_history(model: Any) -> None:
-    import csv
-
-    from fair.zenml.metrics import log_loss_history
-
-    save_dir = getattr(model.trainer, "save_dir", None) if hasattr(model, "trainer") else None
-    if save_dir is None:
-        return
-    results_csv = Path(save_dir) / "results.csv"
-    if not results_csv.exists():
-        return
-
-    train_losses: list[float] = []
-    val_losses: list[float] = []
-    with results_csv.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            stripped = {k.strip(): v.strip() for k, v in row.items()}
-            train_loss = stripped.get("train/loss")
-            val_loss = stripped.get("val/loss")
-            if train_loss is not None and val_loss is not None:
-                train_losses.append(float(train_loss))
-                val_losses.append(float(val_loss))
-
-    if train_losses:
-        import mlflow
-
-        for epoch, (tl, vl) in enumerate(zip(train_losses, val_losses, strict=True)):
-            mlflow.log_metric("train_loss", tl, step=epoch)  # ty: ignore[possibly-missing-attribute]
-            mlflow.log_metric("val_loss", vl, step=epoch)  # ty: ignore[possibly-missing-attribute]
-        log_loss_history(train_losses, val_losses)
-
-
-def predict(session: Any, input_images: str, params: dict[str, Any], bbox: list[float] | None = None) -> dict[str, Any]:
-    pass
-
-
-def pick_utm_crs(lon: float, lat: float) -> Any:
-    import geopandas as gpd
-
-    gdf = gpd.GeoSeries(gpd.points_from_xy([lon], [lat]), crs="EPSG:4326")
-    return gdf.estimate_utm_crs()
-
-
-def build_mosaic(chip_paths: list[Path]) -> Path:
+def build_mosaic(chip_paths: list, out_dir: Path) -> Path:
     import rasterio
     from rasterio.merge import merge
 
-    out_dir = Path(tempfile.mkdtemp(prefix="yolo_cls_mosaic_"))
     out_path = out_dir / "mosaic.tif"
-
     with rasterio.open(chip_paths[0]) as ref:
         profile = ref.profile
 
@@ -89,6 +71,7 @@ def build_mosaic(chip_paths: list[Path]) -> Path:
         dst_kwds={
             **profile,
             "driver": "GTiff",
+            "count": 3,
             "tiled": True,
             "blockxsize": 512,
             "blockysize": 512,
@@ -100,52 +83,119 @@ def build_mosaic(chip_paths: list[Path]) -> Path:
     return out_path
 
 
-def resolve_chip_paths(chips_path: str) -> list[Path]:
+def load_labelled_roads(dataset_labels: str) -> Any:
+    import geopandas as gpd
+
     from fair.utils.data import resolve_directory
 
-    return sorted(resolve_directory(chips_path).rglob("*.tif"))
+    lines = gpd.read_file(resolve_directory(dataset_labels, "*.geojson") / "labels.geojson")
+    roads = lines.dropna(subset=[LABEL_COLUMN]).rename_axis("road_key").reset_index()
+    return roads.astype({LABEL_COLUMN: int})
 
 
-def resolve_label_file(labels_path: str) -> Path:
+def materialize(dataset_chips: str, dataset_labels: str, work_dir: Path) -> Path:
+    """Cut bags along every labelled road into the source repo's dataset layout; deterministic, so each step can
+    rebuild it locally. Lines without a label only count as junctions."""
+    from road_surface_classifier.data.materialize import PatchConfig, materialize_dataset
+
     from fair.utils.data import resolve_directory
 
-    labels_dir = resolve_directory(labels_path)
-    if labels_dir.is_file():
-        return labels_dir
-    return sorted([*labels_dir.rglob("*.geojson"), *labels_dir.rglob("*.gpkg")])[0]
+    work_dir.mkdir(parents=True, exist_ok=True)
+    mosaic = build_mosaic(sorted(resolve_directory(dataset_chips, "*.tif").glob("*.tif")), work_dir)
+
+    dataset_dir = work_dir / "dataset"
+    materialize_dataset(
+        [(SCENE_ID, mosaic, resolve_directory(dataset_labels, "*.geojson") / "labels.geojson")],
+        dataset_dir,
+        LABEL_COLUMN,
+        PatchConfig(**PATCH_CONFIG_KWARGS),
+        seed=MATERIALIZE_SEED,
+    )
+    return dataset_dir
+
+
+def road_subset(dataset: Any, road_keys: list) -> Any:
+    """The bags of `dataset` (a PatchDataset) whose road came from one of `road_keys`."""
+    from torch.utils.data import Subset
+
+    keys = set(road_keys)
+    return Subset(dataset, [i for i, key in enumerate(dataset.roads["source_row"]) if key in keys])
+
+
+def split_roads(roads: Any, val_ratio: float, seed: int, block_size_m: float) -> tuple:
+    """Spatial block split: roads are grouped by the grid block (block_size_m, in UTM metres) holding their centroid,
+    and whole blocks go to val in seeded order until it holds val_ratio of the roads; at least one block stays in
+    train. With a single block every road becomes its own block, i.e. a random split by road."""
+    import numpy as np
+
+    centroids = roads.to_crs(roads.estimate_utm_crs()).geometry.centroid
+    blocks = {}
+    for key, x, y in zip(roads["road_key"], centroids.x, centroids.y, strict=True):
+        blocks.setdefault((int(x // block_size_m), int(y // block_size_m)), []).append(int(key))
+    if len(blocks) < 2:
+        blocks = {key: [key] for key in roads["road_key"].astype(int)}
+
+    groups = [blocks[block] for block in sorted(blocks)]
+    order = np.random.default_rng(seed).permutation(len(groups))
+    target = max(1, round(val_ratio * len(roads)))
+    val_keys = []
+    for i in order[:-1]:
+        if len(val_keys) >= target:
+            break
+        val_keys += groups[i]
+    train_keys = [key for group in groups for key in group if key not in val_keys]
+    return sorted(train_keys), sorted(val_keys), len(groups)
+
+
+def predict(session: Any, input_images: str, params: dict) -> dict:
+    raise NotImplementedError("road inference is step 3")
+
+
+def preprocess(image_path: Any) -> Any:
+    raise NotImplementedError("road inference is step 3")
+
+
+def postprocess(logits: Any) -> Any:
+    raise NotImplementedError("road inference is step 3")
 
 
 @step
 def split_dataset(
     dataset_chips: str,
     dataset_labels: str,
-    hyperparameters: dict[str, Any],
-) -> Annotated[dict[str, Any], "split_info_artifact"]:
+    hyperparameters: dict,
+) -> dict:
+    roads = load_labelled_roads(dataset_labels)
+
+    val_ratio = hyperparameters.get("val_ratio", 0.2)
+    seed = hyperparameters.get("split_seed", 42)
+    block_size_m = hyperparameters.get("block_size_m", 100.0)
+    train_keys, val_keys, n_blocks = split_roads(roads, val_ratio, seed, block_size_m)
+
+    def counts_per_class(keys: list) -> dict:
+        labels = roads.set_index("road_key").loc[keys, LABEL_COLUMN].tolist()
+        return {name: labels.count(i) for i, name in enumerate(CLASS_NAMES)}
 
     split_info = {
-        "strategy": "grid_5m_stratified_grouped",
+        "strategy": "spatial",
         "val_ratio": val_ratio,
-        "test_ratio": test_ratio,
         "seed": seed,
-        "train_count": train_count,
-        "val_count": val_count,
-        "test_count": test_count,
-        "train_counts_per_class": train_counts,
-        "val_counts_per_class": val_counts,
-        "test_counts_per_class": test_counts,
-        "waste_overlap_threshold": waste_overlap_threshold,
-        "cell_size_m": cell_size_m,
+        "block_size_m": block_size_m,
+        "block_count": n_blocks,
+        "train_count": len(train_keys),
+        "val_count": len(val_keys),
+        "train_counts_per_class": counts_per_class(train_keys),
+        "val_counts_per_class": counts_per_class(val_keys),
+        "train_road_keys": train_keys,
+        "val_road_keys": val_keys,
         "class_names": list(CLASS_NAMES),
         "description": (
-            f"5 m x 5 m grid over the chip mosaic; cells with >= "
-            f"{waste_overlap_threshold:.0%} label coverage are 'waste', "
-            f"else 'background'. Waste and background cells are grouped by their source "
-            f"label polygon. Validation and test target "
-            f"{val_ratio:.0%} and {test_ratio:.0%} of source-polygon groups."
+            f"Roads grouped into {block_size_m:g} m grid blocks by their centroid; whole blocks go to val in seeded "
+            f"order until it holds about {val_ratio:.0%} of the roads. With a single block, roads are split at random. "
+            "All bags of a road stay on one side; the split is not stratified by class."
         ),
-        "_yolo_dir": str(yolo_dir),
     }
-    log_metadata(metadata={"fair/split": {k: v for k, v in split_info.items() if not k.startswith("_")}})
+    log_metadata(metadata={"fair/split": split_info})
     return split_info
 
 
@@ -154,57 +204,39 @@ def train_model(
     dataset_chips: str,
     dataset_labels: str,
     base_model_weights: str,
-    hyperparameters: dict[str, Any],
-    split_info: dict[str, Any],
+    hyperparameters: dict,
+    split_info: dict,
     num_classes: int = 2,
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
-) -> Annotated[Any, "trained_model_artifact"]:
-
-    local_weights = _download_checkpoint(base_model_weights)
-    device = _get_device()
-
-    model.save(str(saved_path))
-    return saved_path.read_bytes()
+) -> Annotated[bytes, "trained_model_artifact"]:
+    raise NotImplementedError("training is step 2")
 
 
 @step
 def evaluate_model(
-    trained_model: Any,
+    trained_model: bytes,
     dataset_chips: str,
     dataset_labels: str,
-    hyperparameters: dict[str, Any],
-    split_info: dict[str, Any],
-    class_names: list[str] | None = None,
-) -> Annotated[dict[str, Any], "metrics"]:
-    chip_size = hyperparameters.get("chip_size", MODEL_INPUT_SIZE)
-    metrics_dict: dict[str, Any] = {"accuracy": float(accuracy)}
-    log_evaluation_results(metrics_dict)
-    return metrics_dict
+    hyperparameters: dict,
+    split_info: dict,
+    class_names: list | None = None,
+) -> dict:
+    raise NotImplementedError("evaluation is step 2")
 
 
 @step(output_materializers={"onnx_model": ONNXMaterializer})
-def export_onnx(trained_model: Any) -> Annotated[bytes, "onnx_model"]:
-    import onnx
-
-    model = _restore_checkpoint(trained_model)
-    onnx_path = model.export(format="onnx")
-    proto = onnx.load(onnx_path)
-    onnx.save_model(proto, onnx_path, save_as_external_data=False)
-    onnx.checker.check_model(onnx_path)
-    try:
-        return Path(onnx_path).read_bytes()
-    finally:
-        Path(onnx_path).unlink(missing_ok=True)
+def export_onnx(trained_model: bytes) -> Annotated[bytes, "onnx_model"]:
+    raise NotImplementedError("ONNX export is step 3")
 
 
 @step
 def run_inference(
     model_uri: str,
     input_images: str,
-    inference_params: dict[str, Any],
-) -> Annotated[dict[str, Any], "predictions"]:
+    inference_params: dict,
+) -> Annotated[dict, "predictions"]:
     from fair.serve.base import load_session
 
     session = load_session(model_uri)
@@ -217,7 +249,7 @@ def training_pipeline(
     dataset_chips: str,
     dataset_labels: str,
     num_classes: int,
-    hyperparameters: dict[str, Any],
+    hyperparameters: dict,
 ) -> None:
     split_info = split_dataset(
         dataset_chips=dataset_chips,
@@ -246,7 +278,7 @@ def training_pipeline(
 def inference_pipeline(
     model_uri: str,
     input_images: str,
-    inference_params: dict[str, Any],
+    inference_params: dict,
 ) -> None:
     run_inference(
         model_uri=model_uri,
