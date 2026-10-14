@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from zenml import log_metadata, pipeline, step
 
-from fair.zenml.materializers import CheckpointBytesMaterializer, ONNXMaterializer
+from fair.zenml.materializers import ONNXMaterializer
 
 CLASS_NAMES = ("unpaved", "paved")
 
@@ -48,14 +48,6 @@ PATCH_CONFIG_KWARGS = {
 }
 
 
-def _download_checkpoint(url: str) -> Path:
-    from upath import UPath
-
-    local_path = Path(tempfile.mkdtemp()) / UPath(url).name
-    local_path.write_bytes(UPath(url).read_bytes())
-    return local_path
-
-
 def build_mosaic(chip_paths: list, out_dir: Path) -> Path:
     import rasterio
     from rasterio.merge import merge
@@ -66,12 +58,10 @@ def build_mosaic(chip_paths: list, out_dir: Path) -> Path:
 
     merge(
         [str(p) for p in chip_paths],
-        indexes=[1, 2, 3],
         dst_path=str(out_path),
         dst_kwds={
             **profile,
             "driver": "GTiff",
-            "count": 3,
             "tiled": True,
             "blockxsize": 512,
             "blockysize": 512,
@@ -100,12 +90,12 @@ def materialize(dataset_chips: str, dataset_labels: str, work_dir: Path) -> Path
 
     from fair.utils.data import resolve_directory
 
-    work_dir.mkdir(parents=True, exist_ok=True)
-    mosaic = build_mosaic(sorted(resolve_directory(dataset_chips, "*.tif").glob("*.tif")), work_dir)
+    chips = sorted(resolve_directory(dataset_chips, "*.tif").glob("*.tif"))
+    raster = chips[0] if len(chips) == 1 else build_mosaic(chips, work_dir)
 
     dataset_dir = work_dir / "dataset"
     materialize_dataset(
-        [(SCENE_ID, mosaic, resolve_directory(dataset_labels, "*.geojson") / "labels.geojson")],
+        [(SCENE_ID, raster, resolve_directory(dataset_labels, "*.geojson") / "labels.geojson")],
         dataset_dir,
         LABEL_COLUMN,
         PatchConfig(**PATCH_CONFIG_KWARGS),
@@ -122,29 +112,130 @@ def road_subset(dataset: Any, road_keys: list) -> Any:
     return Subset(dataset, [i for i, key in enumerate(dataset.roads["source_row"]) if key in keys])
 
 
-def split_roads(roads: Any, val_ratio: float, seed: int, block_size_m: float) -> tuple:
-    """Spatial block split: roads are grouped by the grid block (block_size_m, in UTM metres) holding their centroid,
-    and whole blocks go to val in seeded order until it holds val_ratio of the roads; at least one block stays in
-    train. With a single block every road becomes its own block, i.e. a random split by road."""
+def split_roads(roads: Any, val_ratio: float, test_ratio: float, seed: int, block_size_m: float) -> tuple:
     import numpy as np
 
     centroids = roads.to_crs(roads.estimate_utm_crs()).geometry.centroid
     blocks = {}
     for key, x, y in zip(roads["road_key"], centroids.x, centroids.y, strict=True):
         blocks.setdefault((int(x // block_size_m), int(y // block_size_m)), []).append(int(key))
-    if len(blocks) < 2:
+    if len(blocks) < 3:
         blocks = {key: [key] for key in roads["road_key"].astype(int)}
 
     groups = [blocks[block] for block in sorted(blocks)]
-    order = np.random.default_rng(seed).permutation(len(groups))
-    target = max(1, round(val_ratio * len(roads)))
-    val_keys = []
-    for i in order[:-1]:
-        if len(val_keys) >= target:
-            break
-        val_keys += groups[i]
-    train_keys = [key for group in groups for key in group if key not in val_keys]
-    return sorted(train_keys), sorted(val_keys), len(groups)
+    test_target = max(1, round(test_ratio * len(roads)))
+    val_target = max(1, round(val_ratio * len(roads)))
+    train_keys, val_keys, test_keys = [], [], []
+    for assigned, i in enumerate(np.random.default_rng(seed).permutation(len(groups))):
+        remaining = len(groups) - assigned  # blocks not yet assigned, this one included
+        if len(test_keys) < test_target and remaining > 2:
+            test_keys += groups[i]
+        elif len(val_keys) < val_target and remaining > 1:
+            val_keys += groups[i]
+        else:
+            train_keys += groups[i]
+    return sorted(train_keys), sorted(val_keys), sorted(test_keys), len(groups)
+
+
+def _device() -> str:
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def replay_bags(bank: dict) -> tuple:
+    """The replay bank's bags: per-patch backbone features [n_patches, 384] of each bag, and its label. Label 2
+    (paved_segmental) is paved."""
+    import torch
+
+    patches = bank["patches"]
+    bags = {}
+    for row, key in enumerate(zip(patches["scene_id"], patches["road_id"], patches["bag"], strict=True)):
+        bags.setdefault(key, []).append(row)
+    features = bank["features"].float()
+    labels = torch.tensor([min(int(patches["label"][rows[0]]), 1) for rows in bags.values()])
+    return [features[rows] for rows in bags.values()], labels
+
+
+def load_dataset(dataset_dir: Path, road_keys: list, seed: int, augment: bool = False) -> Any:
+    from road_surface_classifier.data.augmentation import build_bag_augmentations, build_patch_augmentations
+    from road_surface_classifier.data.dataset import PatchDataset
+
+    label_map = {i: i for i in range(len(CLASS_NAMES))}
+    if augment:
+        dataset = PatchDataset(
+            dataset_dir,
+            label_map,
+            seed=seed,
+            bag_transform=build_bag_augmentations(),
+            patch_transform=build_patch_augmentations(PATCH_CONFIG_KWARGS["patch_size_px"]),
+        )
+    else:
+        dataset = PatchDataset(dataset_dir, label_map, seed=seed, mode="eval")
+    return road_subset(dataset, road_keys)
+
+
+def load_base_model(head_path: Path, encoder_path: Path) -> Any:
+    from road_surface_classifier.model import load_model
+
+    model = load_model(head_path, encoder_path, trainable="classifier")
+    model.eval().requires_grad_(False)
+    model.classifier.requires_grad_(True)
+    return model
+
+
+def evaluate_dataset(model: Any, dataset: Any, device: str) -> tuple:
+    """Loss and accuracy of the model on `dataset`, all its bags in one batch."""
+    import torch
+    import torch.nn.functional as F
+    from road_surface_classifier.data.dataset import collate_bags
+
+    images, sizes, labels = collate_bags([dataset[i] for i in range(len(dataset))])
+    with torch.no_grad():
+        logits = model(images.to(device), sizes)[0].cpu()
+    loss = F.cross_entropy(logits, labels, weight=model.class_weights.cpu()).item()
+    return loss, (logits.argmax(1) == labels).float().mean().item()
+
+
+def train_classifier(
+    model: Any,
+    train_dataset: Any,
+    val_dataset: Any,
+    replay_features: list,
+    replay_labels: Any,
+    steps: int,
+    replay_bags_per_step: int,
+    learning_rate: float,
+    val_every: int,
+    device: str,
+) -> None:
+    import mlflow
+    import torch
+    import torch.nn.functional as F
+    from road_surface_classifier.data.dataset import collate_bags
+
+    optimizer = torch.optim.AdamW(
+        model.classifier.parameters(), lr=learning_rate, weight_decay=model.hparams.weight_decay
+    )
+    for step_index in range(1, steps + 1):
+        images, sizes, labels = collate_bags([train_dataset[i] for i in range(len(train_dataset))])
+        replay = torch.randint(len(replay_labels), (replay_bags_per_step,))
+        replay_pooled = torch.stack([model.pool(replay_features[i].to(device))[0] for i in replay.tolist()])
+        logits = torch.cat([model(images.to(device), sizes)[0], model.classifier(replay_pooled)])
+        labels = torch.cat([labels, replay_labels[replay]]).to(device)
+        loss = F.cross_entropy(
+            logits, labels, weight=model.class_weights, label_smoothing=model.hparams.label_smoothing
+        )
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.classifier.parameters(), 1.0)
+        optimizer.step()
+        mlflow.log_metric("train_loss", loss.item(), step=step_index)  # ty: ignore[possibly-missing-attribute]
+
+        if step_index % val_every == 0 or step_index == steps:
+            val_loss, val_accuracy = evaluate_dataset(model, val_dataset, device)
+            mlflow.log_metric("val_loss", val_loss, step=step_index)  # ty: ignore[possibly-missing-attribute]
+            mlflow.log_metric("val_accuracy", val_accuracy, step=step_index)  # ty: ignore[possibly-missing-attribute]
 
 
 def predict(session: Any, input_images: str, params: dict) -> dict:
@@ -168,9 +259,10 @@ def split_dataset(
     roads = load_labelled_roads(dataset_labels)
 
     val_ratio = hyperparameters.get("val_ratio", 0.2)
+    test_ratio = hyperparameters.get("test_ratio", 0.2)
     seed = hyperparameters.get("split_seed", 42)
     block_size_m = hyperparameters.get("block_size_m", 100.0)
-    train_keys, val_keys, n_blocks = split_roads(roads, val_ratio, seed, block_size_m)
+    train_keys, val_keys, test_keys, n_blocks = split_roads(roads, val_ratio, test_ratio, seed, block_size_m)
 
     def counts_per_class(keys: list) -> dict:
         labels = roads.set_index("road_key").loc[keys, LABEL_COLUMN].tolist()
@@ -179,27 +271,31 @@ def split_dataset(
     split_info = {
         "strategy": "spatial",
         "val_ratio": val_ratio,
+        "test_ratio": test_ratio,
         "seed": seed,
         "block_size_m": block_size_m,
         "block_count": n_blocks,
         "train_count": len(train_keys),
         "val_count": len(val_keys),
+        "test_count": len(test_keys),
         "train_counts_per_class": counts_per_class(train_keys),
         "val_counts_per_class": counts_per_class(val_keys),
+        "test_counts_per_class": counts_per_class(test_keys),
         "train_road_keys": train_keys,
         "val_road_keys": val_keys,
+        "test_road_keys": test_keys,
         "class_names": list(CLASS_NAMES),
         "description": (
-            f"Roads grouped into {block_size_m:g} m grid blocks by their centroid; whole blocks go to val in seeded "
-            f"order until it holds about {val_ratio:.0%} of the roads. With a single block, roads are split at random. "
-            "All bags of a road stay on one side; the split is not stratified by class."
+            f"Roads grouped into {block_size_m:g} m grid blocks by their centroid; in seeded block order, test gets "
+            f"about {test_ratio:.0%} and val about {val_ratio:.0%} of the roads, the rest is train. With fewer than "
+            "3 blocks, roads are split at random. All bags of a road stay in one split; not stratified by class."
         ),
     }
     log_metadata(metadata={"fair/split": split_info})
     return split_info
 
 
-@step(output_materializers={"trained_model_artifact": CheckpointBytesMaterializer})
+@step
 def train_model(
     dataset_chips: str,
     dataset_labels: str,
@@ -210,25 +306,74 @@ def train_model(
     model_name: str | None = None,
     base_model_id: str | None = None,
     dataset_id: str | None = None,
-) -> Annotated[bytes, "trained_model_artifact"]:
-    raise NotImplementedError("training is step 2")
+) -> Annotated[Any, "trained_model_artifact"]:
+    import mlflow
+    import torch
+
+    from fair.utils.data import resolve_path
+    from fair.zenml.instrumentation import mlflow_training_context
+
+    device = _device()
+    dataset_dir = materialize(dataset_chips, dataset_labels, Path(tempfile.mkdtemp()))
+    train_dataset = load_dataset(dataset_dir, split_info["train_road_keys"], split_info["seed"], augment=True)
+    val_dataset = load_dataset(dataset_dir, split_info["val_road_keys"], split_info["seed"])
+    head_path = resolve_path(base_model_weights)
+    encoder_path = resolve_path(hyperparameters["encoder_uri"])
+    model = load_base_model(head_path, encoder_path)
+    bank = torch.load(resolve_path(hyperparameters["replay_bank_uri"]), map_location="cpu")
+    replay_features, replay_labels = replay_bags(bank)
+    model.to(device)
+
+    # Gate: keep the base model if it already gets the scene's labelled roads (all splits) right.
+    all_road_keys = split_info["train_road_keys"] + split_info["val_road_keys"] + split_info["test_road_keys"]
+    _, base_accuracy = evaluate_dataset(model, load_dataset(dataset_dir, all_road_keys, split_info["seed"]), device)
+    mlflow.log_metric("base_accuracy", base_accuracy)  # ty: ignore[possibly-missing-attribute]
+    if base_accuracy >= hyperparameters.get("gate_accuracy", 0.9):
+        return model.cpu()
+
+    with mlflow_training_context(hyperparameters, model_name, base_model_id, dataset_id):
+        train_classifier(
+            model,
+            train_dataset,
+            val_dataset,
+            replay_features,
+            replay_labels,
+            steps=hyperparameters.get("steps", 200),
+            replay_bags_per_step=hyperparameters.get("replay_bags_per_step", 20),
+            learning_rate=hyperparameters.get("learning_rate", 1e-3),
+            val_every=hyperparameters.get("val_every", 20),
+            device=device,
+        )
+
+    return model.cpu()
 
 
 @step
 def evaluate_model(
-    trained_model: bytes,
+    trained_model: Any,
     dataset_chips: str,
     dataset_labels: str,
     hyperparameters: dict,
     split_info: dict,
     class_names: list | None = None,
 ) -> dict:
-    raise NotImplementedError("evaluation is step 2")
+    from fair.zenml.instrumentation import log_evaluation_results
+
+    device = _device()
+    model = trained_model.to(device)
+    dataset_dir = materialize(dataset_chips, dataset_labels, Path(tempfile.mkdtemp()))
+    loss, accuracy = evaluate_dataset(
+        model, load_dataset(dataset_dir, split_info["test_road_keys"], split_info["seed"]), device
+    )
+
+    metrics = {"accuracy": accuracy, "loss": loss}
+    log_evaluation_results(metrics)
+    return metrics
 
 
 @step(output_materializers={"onnx_model": ONNXMaterializer})
-def export_onnx(trained_model: bytes) -> Annotated[bytes, "onnx_model"]:
-    raise NotImplementedError("ONNX export is step 3")
+def export_onnx(trained_model: Any) -> Annotated[bytes, "onnx_model"]:
+    raise NotImplementedError("ONNX export comes in a later step")
 
 
 @step
