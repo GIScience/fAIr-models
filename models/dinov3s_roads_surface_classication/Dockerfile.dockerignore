@@ -1,6 +1,0 @@
-*
-!models/dinov3s_roads_surface_classication/
-!models/conftest.py
-!models/test_integration.py
-models/dinov3s_roads_surface_classication/artifacts/
-models/dinov3s_roads_surface_classication/__pycache__/

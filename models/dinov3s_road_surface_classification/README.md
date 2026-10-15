@@ -6,23 +6,23 @@ This fAIr model packages [SUSformer](https://github.com/GIScience/Road-surface-c
 
 ## Summary
 
-|           |                                                                                                                 |
-| --------- | --------------------------------------------------------------------------------------------------------------- |
-| Task      | Road surface classification (paved / unpaved) from imagery + road geometry                                      |
-| Input     | 3-band RGB imagery chips plus OSM road `LineString`s (as a `labels.geojson`) covering the same scene             |
-| Output    | One prediction per road: predicted `class`/`label`, `confidence`, carrying through `osm_id` and `highway`         |
-| Coverage  | Global; base model trained on a worldwide catalogue of OpenAerialMap drone/satellite scenes                       |
-| Use cases | Road/route-planning decision support where surface type affects vehicle accessibility                            |
-| License   | Code: MIT. Encoder weights: [DINOv3 License](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md)     |
+|           |                                                                                                               |
+| --------- | ------------------------------------------------------------------------------------------------------------- |
+| Task      | Road surface classification (paved / unpaved) from imagery + road geometry                                    |
+| Input     | 3-band RGB imagery chips plus OSM road `LineString`s (as a `labels.geojson`) covering the same scene          |
+| Output    | One prediction per road: predicted `class`/`label`, `confidence`, carrying through `osm_id` and `highway`     |
+| Coverage  | Global; base model trained on a worldwide catalogue of OpenAerialMap drone/satellite scenes                   |
+| Use cases | Road/route-planning decision support where surface type affects vehicle accessibility                         |
+| License   | Code: MIT. Encoder weights: [DINOv3 License](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md) |
 
 ## Classes
 
 Upstream, SUSformer labels roads against a 3-class taxonomy, but this model trains and predicts on the 2-class collapse of it:
 
-| id | name      | meaning                                                                                                                                            |
-| -- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0  | `unpaved` | No continuous pavement or segmented pavement e.g. dirt, gravel, ground               |
-| 1  | `paved`   | Continuous pavement (asphalt, concrete, tarmac) **or** segmented pavement (sett, cobblestone, paving stones) — collapses the upstream `paved_continuous` and `paved_segmental` classes |
+| id  | name      | meaning                                                                                                                                                                                |
+| --- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | `unpaved` | No continuous pavement or segmented pavement e.g. dirt, gravel, ground                                                                                                                 |
+| 1   | `paved`   | Continuous pavement (asphalt, concrete, tarmac) **or** segmented pavement (sett, cobblestone, paving stones) — collapses the upstream `paved_continuous` and `paved_segmental` classes |
 
 ## Intended use
 
@@ -55,15 +55,15 @@ For a local fAIr fine-tune, `train_model` instead takes your own `dataset_chips`
 Upstream macro-balanced accuracy, mean ± std over 5-fold cross-validation, each fold scored on its held-out validation scenes:
 
 | condition                        | accuracy     |
-| --------------------------------- | ------------ |
-| normal use (full set of patches)  | 96.5% ± 0.7% |
-| only 1 patch per road              | 92.9% ± 0.8% |
-| only 2 patches per road             | 94.9% ± 0.6% |
-| only 4 patches per road             | 96.1% ± 0.7% |
-| imagery downsampled 2x             | 96.3% ± 1.1% |
-| imagery downsampled 4x             | 94.4% ± 1.9% |
-| imagery downsampled 8x             | 91.8% ± 1.7% |
-| imagery downsampled 16x            | 86.0% ± 2.8% |
+| -------------------------------- | ------------ |
+| normal use (full set of patches) | 96.5% ± 0.7% |
+| only 1 patch per road            | 92.9% ± 0.8% |
+| only 2 patches per road          | 94.9% ± 0.6% |
+| only 4 patches per road          | 96.1% ± 0.7% |
+| imagery downsampled 2x           | 96.3% ± 1.1% |
+| imagery downsampled 4x           | 94.4% ± 1.9% |
+| imagery downsampled 8x           | 91.8% ± 1.7% |
+| imagery downsampled 16x          | 86.0% ± 2.8% |
 
 Macro AUROC under normal use: 99.5% ± 0.3%.
 
@@ -76,26 +76,26 @@ Takeaway: the model is fairly robust to having fewer patches per road (even a si
 1. `split_dataset` — splits labelled roads into train/val/test by spatial grid block (roads bucketed by `road_key` into `block_size_m` x `block_size_m` blocks on their UTM centroid, whole blocks assigned to a split in seeded random order; not stratified by class). Defaults: `val_ratio=0.2`, `test_ratio=0.2`, `split_seed=42`, `block_size_m=100.0`.
 2. `train_model` — loads the base model (frozen encoder + attention pool, trainable linear classifier), then **gates**: if the base model already scores at or above `gate_accuracy` (default 0.9) on all labelled roads in the scene, fine-tuning is skipped and the base model is returned unchanged. Otherwise it fine-tunes the classifier head for `steps` (default 200) with AdamW at `learning_rate` (default 1e-3), mixing in `replay_bags_per_step` (default 20) bags of cached backbone features from the base model's own training scenes each step so the head doesn't drift off the original distribution, and validates every `val_every` (default 20) steps.
 3. `evaluate_model` — reports class-weighted cross-entropy loss and accuracy on the held-out test roads.
-4. `export_onnx` — not implemented yet (raises `NotImplementedError`).
+4. `export_onnx` — exports the model as one ONNX file (input: one road's bag of 1–4 patches, output: its logits), with the DINOv3 License and "Built with DINOv3" bundled in the file's metadata.
 
 ## Hyperparameters
 
-| Parameter               |                         Default | Meaning                                                                                                   |
-| ------------------------ | -------------------------------: | ----------------------------------------------------------------------------------------------------------- |
-| `epochs`                 |                                1 | Fixed at 1; fine-tuning length is actually controlled by `steps` (fAIr requires this field)                 |
-| `val_ratio`              |                              0.2 | Share of labelled roads held out for validation                                                             |
-| `test_ratio`             |                              0.2 | Share of labelled roads held out for test (used only by `evaluate_model`)                                   |
-| `split_seed`             |                               42 | Seed for the spatial block split order                                                                      |
-| `id_column`              |                         `osm_id` | Label column identifying a road; all patches of one id stay on one side of the split                        |
-| `n_clusters`             |                               10 | Target number of spatially compact road-id clusters for the split                                           |
-| `steps`                  |                              200 | Fine-tuning steps of the classifier head; each step sees every train road plus replay bags                  |
-| `learning_rate`          |                            0.001 | AdamW learning rate for the classifier head (backbone and attention pool stay frozen)                       |
-| `gate_accuracy`          |                              0.9 | Base-model accuracy on all labelled roads at/above which fine-tuning is skipped                             |
-| `replay_bags_per_step`   |                               20 | Replay-bank bags mixed into every step so the head keeps working on the base training scenes                 |
-| `val_every`              |                               20 | Steps between validation runs during fine-tuning                                                            |
-| `encoder_uri`            | *(TODO — not yet published)*     | Fine-tuned DINOv3 ViT-S/16 encoder `state_dict` (DINOv3 License); loaded with the base head                 |
-| `replay_bank_uri`        | *(TODO — not yet published)*     | Replay bank of per-patch encoder features from the base model's training scenes                             |
-| `confidence_threshold`   |                              0.5 | Below this softmax confidence a road is classed `unknown`                                                   |
+| Parameter              |                                    Default | Meaning                                                                                                                             |
+| ---------------------- | -----------------------------------------: | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `epochs`               |                                          1 | Fixed at 1; fine-tuning length is actually controlled by `steps` (fAIr requires this field)                                         |
+| `val_ratio`            |                                        0.2 | Share of labelled roads held out for validation                                                                                     |
+| `test_ratio`           |                                        0.2 | Share of labelled roads held out for test (used only by `evaluate_model`)                                                           |
+| `split_seed`           |                                         42 | Seed for the spatial block split order                                                                                              |
+| `id_column`            |                                   `osm_id` | Label column identifying a road; all patches of one id stay on one side of the split                                                |
+| `n_clusters`           |                                         10 | Target number of spatially compact road-id clusters for the split                                                                   |
+| `steps`                |                                        200 | Fine-tuning steps of the classifier head; each step sees every train road plus replay bags                                          |
+| `learning_rate`        |                                      0.001 | AdamW learning rate for the classifier head (backbone and attention pool stay frozen)                                               |
+| `gate_accuracy`        |                                        0.9 | Base-model accuracy on all labelled roads at/above which fine-tuning is skipped                                                     |
+| `replay_bags_per_step` |                                         20 | Replay-bank bags mixed into every step so the head keeps working on the base training scenes                                        |
+| `val_every`            |                                         20 | Steps between validation runs during fine-tuning                                                                                    |
+| `encoder_uri`          |           `dinov3_encoder.zip` (SUSformer) | Fine-tuned DINOv3 ViT-S/16 encoder `state_dict` (DINOv3 License), as `encoder.pt` or a `.zip` holding it; loaded with the base head |
+| `replay_bank_uri`      | `replay_bank_2000_features.pt` (SUSformer) | Replay bank of per-patch encoder features from the base model's training scenes                                                     |
+| `confidence_threshold` |                                        0.5 | Below this softmax confidence a road is classed `unknown`                                                                           |
 
 ## Architecture
 
@@ -117,6 +117,6 @@ If you use this model or its weights, please cite the DINOv3 paper it is based o
 > Haziza, D., Wehrstedt, L., Wang, J., Darcet, T., Moutakanni, T.,
 > Sentana, L., Roberts, C., Vedaldi, A., Tolan, J., Brandt, J., Couprie, C.,
 > Mairal, J., Jégou, H., Labatut, P., & Bojanowski, P. (2025).
-> *DINOv3*. arXiv:2508.10104. https://arxiv.org/abs/2508.10104
+> _DINOv3_. arXiv:2508.10104. https://arxiv.org/abs/2508.10104
 
 Source: [GIScience/Road-surface-classification-for-FAIR](https://github.com/GIScience/Road-surface-classification-for-FAIR) (SUSformer), [doi:10.5281/zenodo.23396797](https://doi.org/10.5281/zenodo.23396797).
