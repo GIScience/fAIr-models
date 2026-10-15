@@ -32,7 +32,7 @@
     "description": "Frozen DINOv3-ViT-S/16 (LVD1689M) encoder with a Attention Pooling and Linear Classifier for Mulit Instance Learning and Prediction",
     "mlm:name": "dinov3s-road-surface",
     "mlm:architecture": "ViT-S/16",
-    "mlm:tasks": ["classication"],
+    "mlm:tasks": ["classification"],
     "mlm:framework": "PyTorch",
     "mlm:framework_version": "2.7.1",
     "mlm:pretrained": true,
@@ -59,7 +59,7 @@
       },
       "place": { "name": "Freetown", "country": "Sierra Leone", "country_code": "SL" }
     },
-    "keywords": ["Highways", "Classification"],
+    "keywords": ["road", "classification", "line"],
     "license": "MIT",
     "version": "1",
     "deprecated": false,
@@ -106,59 +106,103 @@
         },
         "pre_processing_function": {
           "format": "python",
-          "expression": "models.dinov3s_road_surface_classication.pipeline:preprocess"
+          "expression": "models.dinov3s_roads_surface_classication.pipeline:preprocess"
         }
       }
     ],
     "mlm:output": [
       {
-        "name": "rooad-classication",
+        "name": "road surface logits",
+        "description": "Logits of one road from its bag of patches (all patches of a road form the input batch).",
         "tasks": ["classification"],
         "result": {
-          "shape": [-1, 2],
+          "shape": [1, 2],
           "dim_order": ["batch", "class"],
           "data_type": "float32"
         },
-        "description": "Per Road Classification.",
         "classification:classes": [
           {
             "name": "unpaved",
             "value": 0,
-            "description": "Road surface type with out continous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones)"
+            "description": "Road surface type without continuous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones)"
           },
           {
             "name": "paved",
             "value": 1,
-            "description": "Road surface type with out continous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones),"
+            "description": "Road surface type with continuous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones)"
           }
         ],
         "post_processing_function": {
           "format": "python",
-          "expression": "models.yolo_swag_waste_grid_segmentation.pipeline:postprocess"
+          "expression": "models.dinov3s_roads_surface_classication.pipeline:postprocess"
         },
         "bands": []
+      },
+      {
+        "name": "roads",
+        "description": "OSM road LineStrings clipped to the imagery, one row per classified road.",
+        "tasks": ["classification"],
+        "result": {
+          "shape": [-1, 5],
+          "dim_order": ["batch", "variables"],
+          "data_type": "float32"
+        },
+        "variables": ["osm_id", "highway", "class", "label", "confidence"],
+        "classification:classes": [
+          {
+            "name": "unpaved",
+            "value": 0,
+            "description": "Road surface type without continuous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones)"
+          },
+          {
+            "name": "paved",
+            "value": 1,
+            "description": "Road surface type with continuous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones)"
+          }
+        ],
+        "post_processing_function": {
+          "format": "python",
+          "expression": "models.dinov3s_roads_surface_classication.pipeline:postprocess"
+        }
       }
     ],
     "cube:dimensions": {
       "features": {
         "type": "geometry",
         "bbox": [-180, -90, 180, 90],
-        "geometry_types": ["Polygon"],
+        "geometry_types": ["LineString"],
         "reference_system": 4326
       }
     },
     "cube:variables": {
+      "osm_id": {
+        "dimensions": ["features"],
+        "type": "auxiliary",
+        "description": "OSM way id of the classified road.",
+        "data_type": "int64"
+      },
+      "highway": {
+        "dimensions": ["features"],
+        "type": "auxiliary",
+        "description": "OSM highway tag of the classified road."
+      },
       "class": {
         "dimensions": ["features"],
         "type": "data",
-        "description": "Predicted class value (1 = building).",
-        "values": [1],
+        "description": "Predicted class value (0 = unpaved, 1 = paved); null when the confidence is below the threshold.",
+        "values": [0, 1],
         "data_type": "uint8"
       },
-      "score": {
+      "label": {
         "dimensions": ["features"],
         "type": "data",
-        "description": "Mean building probability over the polygon.",
+        "description": "Predicted class name; unknown when the confidence is below the threshold.",
+        "values": ["unpaved", "paved", "unknown"]
+      },
+      "confidence": {
+        "dimensions": ["features"],
+        "type": "data",
+        "description": "Softmax probability of the predicted class.",
         "extent": [0, 1],
         "data_type": "float32"
       }
@@ -169,7 +213,8 @@
       "training.test_ratio": 0.2,
       "training.val_every": 20,
       "training.split_seed": 42,
-      "training.block_size_m": 100.0,
+      "training.id_column": "osm_id",
+      "training.n_clusters": 10,
       "training.steps": 200,
       "training.learning_rate": 0.001,
       "training.gate_accuracy": 0.9,
@@ -182,8 +227,8 @@
       "strategy": "spatial",
       "default_ratio": 0.2,
       "seed": 42,
-      "block_size_m": 100.0,
-      "description": "Spatial block split by road: roads are grouped into block_size_m grid blocks (UTM) by their centroid; in seeded block order, test gets about test_ratio and val about default_ratio of the roads, the rest is train, each at least one block. Fewer than 3 blocks fall back to a random split by road. Not stratified by class."
+      "n_clusters": 10,
+      "description": "Spatial cluster split by road id: roads are grouped by id_column (default osm_id) so all roads of one id stay together; the ids form n_clusters spatially compact clusters of equal size by their centroid (recursive bisection along the longer side), and in seeded random order test gets test_ratio and val default_ratio of the clusters (at least one each), the rest is train. Not stratified by class."
     },
     "fair:hyperparameters_spec": [
       {
@@ -211,6 +256,12 @@
         "description": "Seed of the block order in the spatial split."
       },
       {
+        "key": "id_column",
+        "type": "str",
+        "default": "osm_id",
+        "description": "Label column identifying a road, by default the OSM way id; all roads with one id stay on one side of the split. Labels without osm_id name their own id column here."
+      },
+      {
         "key": "test_ratio",
         "type": "float",
         "default": 0.2,
@@ -227,12 +278,12 @@
         "description": "Steps between validation runs on the val roads during fine-tuning."
       },
       {
-        "key": "block_size_m",
-        "type": "float",
-        "default": 100.0,
-        "min": 10.0,
-        "max": 5000.0,
-        "description": "Side length in metres of the grid blocks that keep neighbouring roads on one side of the split; larger blocks = stronger spatial separation, fewer blocks to split."
+        "key": "n_clusters",
+        "type": "int",
+        "default": 10,
+        "min": 3,
+        "max": 1000,
+        "description": "Number of equal-size spatial clusters of the road ids; whole clusters go to train, val and test, so each cluster is one share step (10 clusters = 10% steps). Fewer clusters = stronger spatial separation."
       },
       {
         "key": "steps",
