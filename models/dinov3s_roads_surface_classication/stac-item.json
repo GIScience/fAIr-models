@@ -219,8 +219,8 @@
       "training.learning_rate": 0.001,
       "training.gate_accuracy": 0.9,
       "training.replay_bags_per_step": 20,
-      "training.encoder_uri": "TODO: HTTPS URL of encoder.pt",
-      "training.replay_bank_uri": "TODO: HTTPS URL of replay_bank_2000_features.pt",
+      "training.encoder_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/dinov3_encoder.zip",
+      "training.replay_bank_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/replay_bank_2000_features.pt",
       "inference.confidence_threshold": 0.5
     },
     "fair:split_spec": {
@@ -320,13 +320,13 @@
       {
         "key": "encoder_uri",
         "type": "str",
-        "default": "TODO: HTTPS URL of encoder.pt",
-        "description": "Fine-tuned DINOv3 ViT-S/16 encoder state_dict (DINOv3 License); loaded with the base head."
+        "default": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/dinov3_encoder.zip",
+        "description": "Fine-tuned DINOv3 ViT-S/16 encoder state_dict (DINOv3 License), as encoder.pt or a .zip holding it; loaded with the base head."
       },
       {
         "key": "replay_bank_uri",
         "type": "str",
-        "default": "TODO: HTTPS URL of replay_bank_2000_features.pt",
+        "default": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/replay_bank_2000_features.pt",
         "description": "Replay bank of per-patch encoder features from the base model's training scenes (2000 bags)."
       },
       {
@@ -341,8 +341,8 @@
   },
   "assets": {
     "checkpoint": {
-      "href": "https://huggingface.co/kshitijrajsharma/dinov3-hot-buildings/resolve/main/dinov3s_upernet_hot.ckpt",
-      "title": "Pretrained Lightning checkpoint (decoder fine-tuned on HOT VHR)",
+      "href": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/head.pt",
+      "title": "Pretrained road surface classifier head (attention-MIL pooling + classifier, without the encoder)",
       "type": "application/octet-stream; framework=pytorch",
       "roles": ["mlm:model", "mlm:weights"],
       "mlm:artifact_type": "torch.save",

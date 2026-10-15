@@ -1,4 +1,5 @@
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -142,8 +143,6 @@ def road_subset(dataset: Any, road_ids: list) -> Any:
 
 
 def even_clusters(xy: Any, n_clusters: int) -> Any:
-    """The cluster of each point: recursive bisection along the longer side into n_clusters spatially compact clusters
-    of equal size (up to one point)."""
     import numpy as np
 
     cluster = np.zeros(len(xy), dtype=int)
@@ -162,9 +161,6 @@ def even_clusters(xy: Any, n_clusters: int) -> Any:
 
 
 def split_roads(roads: Any, id_column: str, val_ratio: float, test_ratio: float, seed: int, n_clusters: int) -> tuple:
-    """Spatial split of the ids (all roads of one id stay together): the ids form n_clusters spatial clusters of equal
-    size by their centroid; in seeded random order, test and val get their share of the clusters (at least one each),
-    the rest is train."""
     import numpy as np
 
     ways = roads.dissolve(by=id_column)
@@ -448,6 +444,9 @@ def train_model(
     val_dataset = load_dataset(dataset_dir, val_road_ids, split_info["seed"])
     head_path = resolve_path(base_model_weights)
     encoder_path = resolve_path(hyperparameters["encoder_uri"])
+    if encoder_path.suffix == ".zip":
+        with zipfile.ZipFile(encoder_path) as archive:
+            encoder_path = Path(archive.extract("encoder.pt", tempfile.mkdtemp()))
     model = load_base_model(head_path, encoder_path)
     bank = torch.load(resolve_path(hyperparameters["replay_bank_uri"]), map_location="cpu")
     replay_features, replay_labels = replay_bags(bank)
