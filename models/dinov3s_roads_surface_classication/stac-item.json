@@ -67,8 +67,8 @@
       {
         "name": "HeiGIT",
         "roles": ["producer", "processor"],
-        "url": "https://github.com/kshitijrajsharma/dinov3-hot-ablation",
-        "description": "Author of the dinov3-hot-ablation model recipe (decoder, multi-task training, watershed + DP+MBR-safe vectorisation)."
+        "url": "https://github.com/GIScience/Road-surface-classification-for-FAIR",
+        "description": "Author of the SUSformer classifier."
       },
       {
         "name": "Facebook Research",
@@ -152,7 +152,7 @@
           {
             "name": "unpaved",
             "value": 0,
-            "description": "Road surface type without continuous pavement (eg. asphalt, concrete or tarmac) or segmented pavement (eg. sett, cobblestone or paving stones)"
+            "description": "Road surface type without continuous pavement or segmented pavement (eg. gravel, earth, pebblestone)"
           },
           {
             "name": "paved",
@@ -357,25 +357,25 @@
       "raster:bands": [{ "name": "red" }, { "name": "green" }, { "name": "blue" }]
     },
     "source-code": {
-      "href": "https://github.com/hotosm/fAIr-models/tree/develop/models/dinov3s_buildings",
+      "href": "https://github.com/GIScience/Road-surface-classification-for-FAIR",
       "type": "text/html",
       "roles": ["code"],
-      "mlm:entrypoint": "models.dinov3s_buildings.pipeline:run_inference"
+      "mlm:entrypoint": "models.dinov3s_roads_surface_classification.pipeline:run_inference"
     },
     "mlm:training": {
-      "href": "ghcr.io/hotosm/fair-models/dinov3s_buildings:dev",
+      "href": "ghcr.io/hotosm/fair-models/dinov3s_roads_surface_classification:latest",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Training Docker Image",
       "roles": ["mlm:training-runtime"]
     },
     "mlm:inference": {
-      "href": "ghcr.io/hotosm/fair-models/dinov3s_buildings:dev-inference",
+      "href": "ghcr.io/hotosm/fair-models/dinov3s_roads_surface_classification:latest-inference",
       "type": "application/vnd.oci.image.index.v1+json",
       "title": "Inference Docker Image",
       "roles": ["mlm:inference-runtime"]
     },
     "readme": {
-      "href": "https://raw.githubusercontent.com/hotosm/fAIr-models/refs/heads/develop/models/dinov3s_buildings/README.md",
+      "href": "https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/refs/heads/main/README.md",
       "type": "text/markdown",
       "roles": ["metadata"],
       "title": "Model README"
@@ -384,21 +384,15 @@
   "links": [
     {
       "rel": "license",
-      "href": "https://www.apache.org/licenses/LICENSE-2.0",
+      "href": "https://spdx.org/licenses/MIT.html",
       "type": "text/html",
-      "title": "Apache License 2.0"
+      "title": "MIT License"
     },
     {
       "rel": "cite-as",
-      "href": "https://arxiv.org/abs/2508.10104",
+      "href": "https://doi.org/10.5281/zenodo.23396797",
       "type": "text/html",
-      "title": "DINOv3 (Oquab et al., 2025), encoder"
-    },
-    {
-      "rel": "cite-as",
-      "href": "https://github.com/kshitijrajsharma/dinov3-hot-ablation",
-      "type": "text/html",
-      "title": "dinov3-hot-ablation (Kshitij Raj Sharma), decoder + training + post-processing"
+      "title": "Global SUSformer"
     }
   ]
 }
