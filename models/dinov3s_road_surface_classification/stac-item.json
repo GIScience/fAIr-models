@@ -349,8 +349,8 @@
       "raster:bands": [{ "name": "red" }, { "name": "green" }, { "name": "blue" }]
     },
     "model": {
-      "href": "https://huggingface.co/kshitijrajsharma/dinov3-hot-buildings/resolve/main/dinov3s_buildings.onnx",
-      "title": "Portable ONNX inference model",
+      "href": "https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/data/weights/dinov3s_road_surface.onnx",
+      "title": "Portable ONNX inference model (base model; DINOv3 License bundled in the file's metadata)",
       "type": "application/octet-stream; framework=onnx",
       "roles": ["mlm:model", "mlm:compiled"],
       "mlm:artifact_type": "onnx",

@@ -45,10 +45,10 @@ In this fAIr packaging, bags are cut by `road_surface_classifier.data.materializ
 
 The base model is trained on SUSformer's labelled catalogue:
 
-- **Scale**: 131 labelled scenes, 4,649 labelled road segments, globally distributed across OpenAerialMap (mostly UAV/drone captures, with a smaller share of high-resolution satellite imagery).
+- **Scale**: 124 labelled scenes, 4,649 labelled road segments, globally distributed across OpenAerialMap (mostly UAV/drone captures, with a smaller share of high-resolution satellite imagery).
 - **Class balance** (3-class, as hand-labelled): `unpaved` 1,784 (38.4%), `paved_continuous` 2,600 (55.9%), `paved_segmental` 265 (5.7%). Collapsed to the 2 classes this model trains on: 1,784 (38.4%) unpaved vs. 2,865 (61.6%) paved — a real imbalance the training loss compensates for (class-weighted cross-entropy). If you fine-tune on a new region, expect to re-balance for your own label distribution rather than assuming this one transfers.
 
-For a local fAIr fine-tune, `train_model` instead takes your own `dataset_chips` (imagery) and `dataset_labels` (a `labels.geojson` of roads, with a `label` column of 0/1/2 — 2 is folded into paved) and re-materializes bags from those.
+For a local fAIr fine-tune, `train_model` instead takes your own `dataset_chips` (imagery) and `dataset_labels` (a `labels.geojson` of roads, see [Input data](#input-data)) and re-materializes bags from those.
 
 ## Reliability under degraded conditions
 
@@ -71,9 +71,33 @@ Takeaway: the model is fairly robust to having fewer patches per road (even a si
 
 ## How to use
 
+### Input data
+
+Fine-tuning takes two directories (local paths or `s3://` prefixes):
+
+- `dataset_chips`: GeoTIFF imagery (`*.tif`) covering the labelled roads; several chips are mosaicked into one scene.
+- `dataset_labels`: a single `labels.geojson` with the roads, following this contract:
+
+| Field      | Required | Contract                                                                                                                                                                                                 |
+| ---------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry   | yes      | `LineString` or `MultiLineString` road centrelines; other geometry types are dropped.                                                                                                                    |
+| `label`    | yes      | Integer surface class: **`0` = unpaved**, **`1` = paved**. Leave it empty (`null`) for roads you don't label: they are not trained or evaluated on, but still count as road network for junctions. No other values are accepted (collapse SUSformer's 3-class `2` = `paved_segmental` to `1` first). |
+| `osm_id`   | yes      | Road id (the column is set by the `id_column` hyperparameter). All features with the same id stay in the same split, so pieces of one OSM way never leak between train, val and test.                    |
+| `highway`  | no       | OSM `highway` value. Lines tagged `footway`, `path`, `cycleway`, `steps`, `pedestrian`, `corridor`, `platform`, `construction` (and other non-carriageway values) are not treated as junctions when patches are placed. |
+
+Example feature:
+
+```json
+{
+  "type": "Feature",
+  "properties": { "osm_id": 123456789, "highway": "residential", "label": 1 },
+  "geometry": { "type": "LineString", "coordinates": [[85.5201, 27.6301], [85.5209, 27.6305]] }
+}
+```
+
 ### Fine-tuning (`training_pipeline`)
 
-1. `split_dataset` — splits labelled roads into train/val/test by spatial grid block (roads bucketed by `road_key` into `block_size_m` x `block_size_m` blocks on their UTM centroid, whole blocks assigned to a split in seeded random order; not stratified by class). Defaults: `val_ratio=0.2`, `test_ratio=0.2`, `split_seed=42`, `block_size_m=100.0`.
+1. `split_dataset` — splits the labelled roads into train/val/test by id (`id_column`, default `osm_id`): the ids form `n_clusters` (default 10) spatially compact clusters of equal size by their centroid, and in seeded random order test gets `test_ratio` and val `val_ratio` of the clusters (at least one each), the rest is train; not stratified by class. Defaults: `val_ratio=0.2`, `test_ratio=0.2`, `split_seed=42`.
 2. `train_model` — loads the base model (frozen encoder + attention pool, trainable linear classifier), then **gates**: if the base model already scores at or above `gate_accuracy` (default 0.9) on all labelled roads in the scene, fine-tuning is skipped and the base model is returned unchanged. Otherwise it fine-tunes the classifier head for `steps` (default 200) with AdamW at `learning_rate` (default 1e-3), mixing in `replay_bags_per_step` (default 20) bags of cached backbone features from the base model's own training scenes each step so the head doesn't drift off the original distribution, and validates every `val_every` (default 20) steps.
 3. `evaluate_model` — reports class-weighted cross-entropy loss and accuracy on the held-out test roads.
 4. `export_onnx` — exports the model as one ONNX file (input: one road's bag of 1–4 patches, output: its logits), with the DINOv3 License and "Built with DINOv3" bundled in the file's metadata.
@@ -99,7 +123,7 @@ Takeaway: the model is fairly robust to having fewer patches per road (even a si
 
 ## Architecture
 
-- **Encoder**: DINOv3-ViT-S/16 (`vit_small_patch16_dinov3.lvd1689m`, pretrained on LVD-1689M, ~22M params), frozen.
+- **Encoder**: DINOv3-ViT-S/16 (`vit_small_patch16_dinov3.lvd1689m`, pretrained on LVD-1689M, ~22M params), fine-tuned for SUSformer on its road training data: 124 globally distributed OpenAerialMap scenes (mostly UAV/drone, with a smaller share of high-resolution satellite imagery) with 4,649 hand-labelled road segments (see [Training data](#training-data)). Frozen during fAIr fine-tuning.
 - **Pooling**: attention pooling over a road's bag of patch encodings, weighting clearer/more informative patches more heavily.
 - **Head**: linear classifier on the pooled representation, the only trainable part during fAIr fine-tuning.
 - **Native patch input**: 256x256 RGB, ~15 m of road per patch.
