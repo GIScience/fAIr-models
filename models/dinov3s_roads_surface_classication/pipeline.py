@@ -4,6 +4,7 @@ from typing import Annotated, Any
 
 from zenml import log_metadata, pipeline, step
 
+from fair.zenml.instrumentation import log_evaluation_results, mlflow_training_context
 from fair.zenml.materializers import ONNXMaterializer
 
 CLASS_NAMES = ("unpaved", "paved")
@@ -11,6 +12,10 @@ CLASS_NAMES = ("unpaved", "paved")
 LABEL_COLUMN = "label"
 SCENE_ID = "scene"
 MATERIALIZE_SEED = 0
+
+RAW_DATA_API_URL = "https://api-prod.raw-data.hotosm.org/v1"
+# Roads to classify, as STAC `label:classes` (see fair.datasets._osm_filters); "*" matches any highway value.
+ROAD_LABEL_CLASSES = [{"name": "highway", "classes": ["*"]}]
 
 PATCH_CONFIG_KWARGS = {
     "patch_size_m": 15.0,
@@ -47,6 +52,14 @@ PATCH_CONFIG_KWARGS = {
     ],
 }
 
+# Inference / evaluation: one bag centred along the road (same patch budget), cut on the road centreline.
+INFERENCE_PATCH_CONFIG_KWARGS = {
+    **PATCH_CONFIG_KWARGS,
+    "n_bags": 1,
+    "lateral_jitter_m": 0.0,
+    "bearing_jitter_deg": 0.0,
+}
+
 
 def build_mosaic(chip_paths: list, out_dir: Path) -> Path:
     import rasterio
@@ -73,19 +86,36 @@ def build_mosaic(chip_paths: list, out_dir: Path) -> Path:
     return out_path
 
 
-def load_labelled_roads(dataset_labels: str) -> Any:
-    import geopandas as gpd
+def load_labelled_roads(dataset_labels: str, id_column: str) -> Any:
+    """The labelled roads with the `road_id` materialize gives them (it selects them with the same functions) and
+    their `id_column` value, e.g. the OSM way id; several roads can share one id."""
+    from road_surface_classifier.data.materialize import load_lines, roads_to_cut
 
     from fair.utils.data import resolve_directory
 
-    lines = gpd.read_file(resolve_directory(dataset_labels, "*.geojson") / "labels.geojson")
-    roads = lines.dropna(subset=[LABEL_COLUMN]).rename_axis("road_key").reset_index()
-    return roads.astype({LABEL_COLUMN: int})
+    lines = load_lines(resolve_directory(dataset_labels, "*.geojson") / "labels.geojson", "EPSG:4326")
+    roads = roads_to_cut(lines, LABEL_COLUMN).rename_axis("road_id").reset_index()
+    # roads_to_cut only keeps the row of the labels each road was cut from (`source_row`), so take the id from there.
+    roads[id_column] = roads["source_row"].map(lines.drop_duplicates("source_row").set_index("source_row")[id_column])
+    return roads.drop(columns="source_row").astype({LABEL_COLUMN: int})
 
 
-def materialize(dataset_chips: str, dataset_labels: str, work_dir: Path) -> Path:
+def split_road_ids(dataset_labels: str, split_info: dict, split: str) -> list:
+    """The `road_id`s of the roads in `split` ("train", "val" or "test") of `split_info`."""
+    roads = load_labelled_roads(dataset_labels, split_info["id_column"])
+    return roads.loc[roads[split_info["id_column"]].isin(split_info[f"{split}_ids"]), "road_id"].tolist()
+
+
+def materialize(
+    dataset_chips: str,
+    dataset_labels: str,
+    work_dir: Path,
+    patch_config_kwargs: dict = PATCH_CONFIG_KWARGS,
+    label_column: str | None = LABEL_COLUMN,
+) -> Path:
     """Cut bags along every labelled road into the source repo's dataset layout; deterministic, so each step can
-    rebuild it locally. Lines without a label only count as junctions."""
+    rebuild it locally. A single bag sits centred along the road. Lines without a label only count as junctions;
+    with `label_column=None` every line is cut (inference)."""
     from road_surface_classifier.data.materialize import PatchConfig, materialize_dataset
 
     from fair.utils.data import resolve_directory
@@ -97,44 +127,58 @@ def materialize(dataset_chips: str, dataset_labels: str, work_dir: Path) -> Path
     materialize_dataset(
         [(SCENE_ID, raster, resolve_directory(dataset_labels, "*.geojson") / "labels.geojson")],
         dataset_dir,
-        LABEL_COLUMN,
-        PatchConfig(**PATCH_CONFIG_KWARGS),
+        label_column,
+        PatchConfig(**patch_config_kwargs),
         seed=MATERIALIZE_SEED,
     )
     return dataset_dir
 
 
-def road_subset(dataset: Any, road_keys: list) -> Any:
-    """The bags of `dataset` (a PatchDataset) whose road came from one of `road_keys`."""
+def road_subset(dataset: Any, road_ids: list) -> Any:
     from torch.utils.data import Subset
 
-    keys = set(road_keys)
-    return Subset(dataset, [i for i, key in enumerate(dataset.roads["source_row"]) if key in keys])
+    road_ids = set(road_ids)
+    return Subset(dataset, [i for i, road_id in enumerate(dataset.roads["road_id"]) if road_id in road_ids])
 
 
-def split_roads(roads: Any, val_ratio: float, test_ratio: float, seed: int, block_size_m: float) -> tuple:
+def even_clusters(xy: Any, n_clusters: int) -> Any:
+    """The cluster of each point: recursive bisection along the longer side into n_clusters spatially compact clusters
+    of equal size (up to one point)."""
     import numpy as np
 
-    centroids = roads.to_crs(roads.estimate_utm_crs()).geometry.centroid
-    blocks = {}
-    for key, x, y in zip(roads["road_key"], centroids.x, centroids.y, strict=True):
-        blocks.setdefault((int(x // block_size_m), int(y // block_size_m)), []).append(int(key))
-    if len(blocks) < 3:
-        blocks = {key: [key] for key in roads["road_key"].astype(int)}
+    cluster = np.zeros(len(xy), dtype=int)
 
-    groups = [blocks[block] for block in sorted(blocks)]
-    test_target = max(1, round(test_ratio * len(roads)))
-    val_target = max(1, round(val_ratio * len(roads)))
-    train_keys, val_keys, test_keys = [], [], []
-    for assigned, i in enumerate(np.random.default_rng(seed).permutation(len(groups))):
-        remaining = len(groups) - assigned  # blocks not yet assigned, this one included
-        if len(test_keys) < test_target and remaining > 2:
-            test_keys += groups[i]
-        elif len(val_keys) < val_target and remaining > 1:
-            val_keys += groups[i]
-        else:
-            train_keys += groups[i]
-    return sorted(train_keys), sorted(val_keys), sorted(test_keys), len(groups)
+    def bisect(points: Any, first: int, n: int) -> None:
+        if n == 1:
+            cluster[points] = first
+            return
+        ordered = points[np.argsort(xy[points, np.ptp(xy[points], axis=0).argmax()], kind="stable")]
+        cut = round(len(points) * (n // 2) / n)
+        bisect(ordered[:cut], first, n // 2)
+        bisect(ordered[cut:], first + n // 2, n - n // 2)
+
+    bisect(np.arange(len(xy)), 0, n_clusters)
+    return cluster
+
+
+def split_roads(roads: Any, id_column: str, val_ratio: float, test_ratio: float, seed: int, n_clusters: int) -> tuple:
+    """Spatial split of the ids (all roads of one id stay together): the ids form n_clusters spatial clusters of equal
+    size by their centroid; in seeded random order, test and val get their share of the clusters (at least one each),
+    the rest is train."""
+    import numpy as np
+
+    ways = roads.dissolve(by=id_column)
+    centroids = ways.to_crs(ways.estimate_utm_crs()).geometry.centroid
+    n_clusters = min(n_clusters, len(ways))
+    cluster_of_way = even_clusters(np.column_stack([centroids.x, centroids.y]), n_clusters)
+
+    order = np.random.default_rng(seed).permutation(n_clusters)
+    n_test, n_val = max(1, round(test_ratio * n_clusters)), max(1, round(val_ratio * n_clusters))
+    test_ids, val_ids, train_ids = (
+        sorted(ways.index[np.isin(cluster_of_way, clusters)].tolist())
+        for clusters in (order[:n_test], order[n_test : n_test + n_val], order[n_test + n_val :])
+    )
+    return train_ids, val_ids, test_ids, n_clusters
 
 
 def _device() -> str:
@@ -157,7 +201,7 @@ def replay_bags(bank: dict) -> tuple:
     return [features[rows] for rows in bags.values()], labels
 
 
-def load_dataset(dataset_dir: Path, road_keys: list, seed: int, augment: bool = False) -> Any:
+def load_dataset(dataset_dir: Path, road_ids: list, seed: int, augment: bool = False) -> Any:
     from road_surface_classifier.data.augmentation import build_bag_augmentations, build_patch_augmentations
     from road_surface_classifier.data.dataset import PatchDataset
 
@@ -172,7 +216,7 @@ def load_dataset(dataset_dir: Path, road_keys: list, seed: int, augment: bool = 
         )
     else:
         dataset = PatchDataset(dataset_dir, label_map, seed=seed, mode="eval")
-    return road_subset(dataset, road_keys)
+    return road_subset(dataset, road_ids)
 
 
 def load_base_model(head_path: Path, encoder_path: Path) -> Any:
@@ -238,16 +282,98 @@ def train_classifier(
             mlflow.log_metric("val_accuracy", val_accuracy, step=step_index)  # ty: ignore[possibly-missing-attribute]
 
 
+def fetch_roads(bbox: list[float]) -> Any:
+    """OSM road ways intersecting `bbox` from the HOT raw-data API, whole and unclipped, with `osm_id` and `highway`."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    import geopandas as gpd
+    from geomltoolkits.downloader.osm import download_osm_data
+
+    from fair.datasets import _osm_filters
+
+    download = download_osm_data(
+        bbox=bbox,
+        api_url=RAW_DATA_API_URL,
+        filters=_osm_filters(ROAD_LABEL_CLASSES, "line"),
+        geometry_types=["line"],
+        use_st_within=False,  # ST_Intersects: keep the roads crossing the AOI edge
+    )
+    with ThreadPoolExecutor(1) as pool:
+        osm = pool.submit(asyncio.run, download).result()
+
+    roads = gpd.GeoDataFrame.from_features(osm, crs="EPSG:4326", columns=["geometry", "osm_id", "osm_type", "tags"])
+    roads = roads[roads["osm_type"] == "ways_line"]
+    return roads.assign(highway=roads["tags"].str.get("highway"))[["geometry", "osm_id", "highway"]]
+
+
 def predict(session: Any, input_images: str, params: dict) -> dict:
-    raise NotImplementedError("road inference is step 3")
+    import geopandas as gpd
+    import pandas as pd
+    import rasterio
+    from road_surface_classifier.data.materialize import PATCHES_FILENAME
+    from shapely.geometry import box
+
+    from fair.utils.data import resolve_directory
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        work_dir = Path(tmpdir)
+        mosaic_path = build_mosaic(sorted(resolve_directory(input_images, "*.tif").glob("*.tif")), work_dir)
+        with rasterio.open(mosaic_path) as mosaic:
+            footprint = gpd.GeoSeries([box(*mosaic.bounds)], crs=mosaic.crs)
+
+        utm = footprint.estimate_utm_crs()
+        clip_area = footprint.to_crs(utm).buffer(-INFERENCE_PATCH_CONFIG_KWARGS["patch_size_m"] / 2)
+        roads = fetch_roads(list(footprint.to_crs(4326).total_bounds))
+        roads = roads.to_crs(utm).clip(clip_area, keep_geom_type=True).explode(ignore_index=True).to_crs(4326)
+
+        labels_dir = work_dir / "labels"
+        labels_dir.mkdir()
+        roads.to_file(labels_dir / "labels.geojson", driver="GeoJSON")
+        # The mosaic is the only .tif in work_dir, so materialize cuts from it without merging again.
+        dataset_dir = materialize(
+            str(work_dir), str(labels_dir), work_dir, INFERENCE_PATCH_CONFIG_KWARGS, label_column=None
+        )
+        scene_dir = dataset_dir / SCENE_ID
+
+        # Every row of `roads` is a LineString, so materialize keeps them all in order: road_id is the row of `roads`.
+        patches = pd.read_parquet(scene_dir / PATCHES_FILENAME, columns=["road_id", "slot", "path"])
+        logits = {}
+        for road_id, road_patches in patches.sort_values("slot").groupby("road_id"):
+            patch_paths = [scene_dir / path for path in road_patches["path"]]
+            logits[road_id] = session.run(None, {"image": preprocess(patch_paths)})[0]
+
+    return postprocess(roads, logits, params["confidence_threshold"])
 
 
-def preprocess(image_path: Any) -> Any:
-    raise NotImplementedError("road inference is step 3")
+def preprocess(patch_paths: list) -> Any:
+    import numpy as np
+    from PIL import Image
+
+    patches = [np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) for path in patch_paths]
+    return np.stack(patches).transpose(0, 3, 1, 2) / 255
 
 
-def postprocess(logits: Any) -> Any:
-    raise NotImplementedError("road inference is step 3")
+def postprocess(roads: Any, logits: dict, confidence_threshold: float) -> dict:
+    import json
+
+    import numpy as np
+    import pandas as pd
+
+    road_ids = list(logits)
+    stacked = np.array([logits[road_id][0] for road_id in road_ids]).reshape(-1, len(CLASS_NAMES))
+    scores = np.exp(stacked - stacked.max(axis=1, keepdims=True))
+    probabilities = scores / scores.sum(axis=1, keepdims=True)
+    class_ids = probabilities.argmax(axis=1)
+    confidence = probabilities.max(axis=1)
+    known = confidence >= confidence_threshold
+
+    classified = roads.loc[road_ids].assign(
+        **{"class": pd.Series(class_ids, index=road_ids, dtype="Int64").where(known)},
+        label=np.where(known, np.asarray(CLASS_NAMES)[class_ids], "unknown"),
+        confidence=confidence,
+    )
+    return json.loads(classified.to_json(drop_id=True))
 
 
 @step
@@ -256,16 +382,17 @@ def split_dataset(
     dataset_labels: str,
     hyperparameters: dict,
 ) -> dict:
-    roads = load_labelled_roads(dataset_labels)
+    id_column = hyperparameters.get("id_column", "osm_id")
+    roads = load_labelled_roads(dataset_labels, id_column)
 
     val_ratio = hyperparameters.get("val_ratio", 0.2)
     test_ratio = hyperparameters.get("test_ratio", 0.2)
     seed = hyperparameters.get("split_seed", 42)
-    block_size_m = hyperparameters.get("block_size_m", 100.0)
-    train_keys, val_keys, test_keys, n_blocks = split_roads(roads, val_ratio, test_ratio, seed, block_size_m)
+    n_clusters = hyperparameters.get("n_clusters", 10)
+    train_ids, val_ids, test_ids, n_clusters = split_roads(roads, id_column, val_ratio, test_ratio, seed, n_clusters)
 
-    def counts_per_class(keys: list) -> dict:
-        labels = roads.set_index("road_key").loc[keys, LABEL_COLUMN].tolist()
+    def counts_per_class(ids: list) -> dict:
+        labels = roads.loc[roads[id_column].isin(ids), LABEL_COLUMN].tolist()
         return {name: labels.count(i) for i, name in enumerate(CLASS_NAMES)}
 
     split_info = {
@@ -273,22 +400,22 @@ def split_dataset(
         "val_ratio": val_ratio,
         "test_ratio": test_ratio,
         "seed": seed,
-        "block_size_m": block_size_m,
-        "block_count": n_blocks,
-        "train_count": len(train_keys),
-        "val_count": len(val_keys),
-        "test_count": len(test_keys),
-        "train_counts_per_class": counts_per_class(train_keys),
-        "val_counts_per_class": counts_per_class(val_keys),
-        "test_counts_per_class": counts_per_class(test_keys),
-        "train_road_keys": train_keys,
-        "val_road_keys": val_keys,
-        "test_road_keys": test_keys,
+        "n_clusters": n_clusters,
+        "id_column": id_column,
+        "train_count": len(train_ids),
+        "val_count": len(val_ids),
+        "test_count": len(test_ids),
+        "train_counts_per_class": counts_per_class(train_ids),
+        "val_counts_per_class": counts_per_class(val_ids),
+        "test_counts_per_class": counts_per_class(test_ids),
+        "train_ids": train_ids,
+        "val_ids": val_ids,
+        "test_ids": test_ids,
         "class_names": list(CLASS_NAMES),
         "description": (
-            f"Roads grouped into {block_size_m:g} m grid blocks by their centroid; in seeded block order, test gets "
-            f"about {test_ratio:.0%} and val about {val_ratio:.0%} of the roads, the rest is train. With fewer than "
-            "3 blocks, roads are split at random. All bags of a road stay in one split; not stratified by class."
+            f"Roads grouped by {id_column} (all roads of one id stay together); the ids form {n_clusters} spatial "
+            f"clusters of equal size by their centroid (recursive bisection), and in seeded random order test gets "
+            f"{test_ratio:.0%} and val {val_ratio:.0%} of the clusters (at least one each), the rest is train."
         ),
     }
     log_metadata(metadata={"fair/split": split_info})
@@ -311,12 +438,14 @@ def train_model(
     import torch
 
     from fair.utils.data import resolve_path
-    from fair.zenml.instrumentation import mlflow_training_context
 
     device = _device()
     dataset_dir = materialize(dataset_chips, dataset_labels, Path(tempfile.mkdtemp()))
-    train_dataset = load_dataset(dataset_dir, split_info["train_road_keys"], split_info["seed"], augment=True)
-    val_dataset = load_dataset(dataset_dir, split_info["val_road_keys"], split_info["seed"])
+    train_road_ids, val_road_ids, test_road_ids = (
+        split_road_ids(dataset_labels, split_info, split) for split in ("train", "val", "test")
+    )
+    train_dataset = load_dataset(dataset_dir, train_road_ids, split_info["seed"], augment=True)
+    val_dataset = load_dataset(dataset_dir, val_road_ids, split_info["seed"])
     head_path = resolve_path(base_model_weights)
     encoder_path = resolve_path(hyperparameters["encoder_uri"])
     model = load_base_model(head_path, encoder_path)
@@ -325,8 +454,8 @@ def train_model(
     model.to(device)
 
     # Gate: keep the base model if it already gets the scene's labelled roads (all splits) right.
-    all_road_keys = split_info["train_road_keys"] + split_info["val_road_keys"] + split_info["test_road_keys"]
-    _, base_accuracy = evaluate_dataset(model, load_dataset(dataset_dir, all_road_keys, split_info["seed"]), device)
+    all_road_ids = train_road_ids + val_road_ids + test_road_ids
+    _, base_accuracy = evaluate_dataset(model, load_dataset(dataset_dir, all_road_ids, split_info["seed"]), device)
     mlflow.log_metric("base_accuracy", base_accuracy)  # ty: ignore[possibly-missing-attribute]
     if base_accuracy >= hyperparameters.get("gate_accuracy", 0.9):
         return model.cpu()
@@ -357,13 +486,14 @@ def evaluate_model(
     split_info: dict,
     class_names: list | None = None,
 ) -> dict:
-    from fair.zenml.instrumentation import log_evaluation_results
 
     device = _device()
     model = trained_model.to(device)
-    dataset_dir = materialize(dataset_chips, dataset_labels, Path(tempfile.mkdtemp()))
+    dataset_dir = materialize(
+        dataset_chips, dataset_labels, Path(tempfile.mkdtemp()), INFERENCE_PATCH_CONFIG_KWARGS
+    )
     loss, accuracy = evaluate_dataset(
-        model, load_dataset(dataset_dir, split_info["test_road_keys"], split_info["seed"]), device
+        model, load_dataset(dataset_dir, split_road_ids(dataset_labels, split_info, "test"), split_info["seed"]), device
     )
 
     metrics = {"accuracy": accuracy, "loss": loss}
@@ -373,7 +503,37 @@ def evaluate_model(
 
 @step(output_materializers={"onnx_model": ONNXMaterializer})
 def export_onnx(trained_model: Any) -> Annotated[bytes, "onnx_model"]:
-    raise NotImplementedError("ONNX export comes in a later step")
+    import onnx
+    import torch
+    from torch import nn
+
+    class _MainOnly(nn.Module):
+        def __init__(self, wrapped: nn.Module) -> None:
+            super().__init__()
+            self.wrapped = wrapped
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # All patches of x form one bag + drop the attention
+            return self.wrapped(x, [x.shape[0]])[0]
+
+    model = _MainOnly(trained_model.cpu().eval()).eval()
+    max_patches = INFERENCE_PATCH_CONFIG_KWARGS["max_patches_per_road"]
+    size = INFERENCE_PATCH_CONFIG_KWARGS["patch_size_px"]
+    dummy = torch.rand(max_patches, 3, size, size)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = str(Path(tmpdir) / "model.onnx")
+        torch.onnx.export(
+            model,
+            (dummy,),
+            path,
+            input_names=["image"],
+            output_names=["logits"],
+            dynamic_shapes={"x": {0: torch.export.Dim("patches", min=1, max=max_patches)}},
+            dynamo=True,
+        )
+        onnx.save(onnx.load(path), path, save_as_external_data=False)
+        onnx.checker.check_model(path)
+        return Path(path).read_bytes()
 
 
 @step
