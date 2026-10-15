@@ -34,6 +34,8 @@ Upstream, SUSformer labels roads against a 3-class taxonomy, but this model trai
 
 Rather than judging a road from a single photo, the model looks at several close-up patches taken at different points along the same road segment and combines what it sees across all of them into one decision (multi-instance learning over a "bag" of patches), weighting the clearest patches more heavily via attention pooling. A single patch can be misleading — a tree or building can cover the road, or the image can be blurred — so a handful of patches per road gives a more reliable signal than any one patch alone.
 
+![Example patches along roads](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/patches_examples.png)
+
 In this fAIr packaging, bags are cut by `road_surface_classifier.data.materialize.materialize_dataset` per labelled road, configured via `PATCH_CONFIG_KWARGS` in `pipeline.py`:
 
 - Patch size: 15 m along the road, rendered at 256x256 px.
@@ -41,12 +43,24 @@ In this fAIr packaging, bags are cut by `road_surface_classifier.data.materializ
 - 5 differently-sampled bags generated per labelled road during materialization, with lateral jitter (1.5 m) and bearing jitter (10°) so the model isn't sensitive to exactly where along a road a patch is taken.
 - Patches too close to junctions (7.5 m clearance) or to a road's endpoints (10% margin) are avoided; junction clearance ignores minor highway values (`footway`, `path`, `cycleway`, `steps`, etc.).
 
+![Patches of one road with augmentation](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/patches_with_augmentation.png)
+
 ## Training data
 
 The base model is trained on SUSformer's labelled catalogue:
 
+![Distribution of the training scenes](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/scenes_distribution.png)
+
 - **Scale**: 124 labelled scenes, 4,649 labelled road segments, globally distributed across OpenAerialMap (mostly UAV/drone captures, with a smaller share of high-resolution satellite imagery).
 - **Class balance** (3-class, as hand-labelled): `unpaved` 1,784 (38.4%), `paved_continuous` 2,600 (55.9%), `paved_segmental` 265 (5.7%). Collapsed to the 2 classes this model trains on: 1,784 (38.4%) unpaved vs. 2,865 (61.6%) paved — a real imbalance the training loss compensates for (class-weighted cross-entropy). If you fine-tune on a new region, expect to re-balance for your own label distribution rather than assuming this one transfers.
+
+![Labelled roads per World Bank region](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/pie_chart_per_wb_region.png)
+
+![Labels per class and World Bank region](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/labels_per_class_and_wb_region.png)
+
+Most labelled scenes are high-resolution (5 cm and below) UAV imagery, but UAV and satellite imagery with a lower resolution is included too:
+
+![Resolution of the training scenes](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/resolutions.png)
 
 For a local fAIr fine-tune, `train_model` instead takes your own `dataset_chips` (imagery) and `dataset_labels` (a `labels.geojson` of roads, see [Input data](#input-data)) and re-materializes bags from those.
 
@@ -54,20 +68,36 @@ For a local fAIr fine-tune, `train_model` instead takes your own `dataset_chips`
 
 Upstream macro-balanced accuracy, mean ± std over 5-fold cross-validation, each fold scored on its held-out validation scenes:
 
-| condition                        | accuracy     |
-| -------------------------------- | ------------ |
-| normal use (full set of patches) | 96.5% ± 0.7% |
-| only 1 patch per road            | 92.9% ± 0.8% |
-| only 2 patches per road          | 94.9% ± 0.6% |
-| only 4 patches per road          | 96.1% ± 0.7% |
-| imagery downsampled 2x           | 96.3% ± 1.1% |
-| imagery downsampled 4x           | 94.4% ± 1.9% |
-| imagery downsampled 8x           | 91.8% ± 1.7% |
-| imagery downsampled 16x          | 86.0% ± 2.8% |
+| condition                        |   approx. GSD | accuracy     |
+| -------------------------------- |--------------:| ------------ |
+| normal use (full set of patches) |        5.9 cm | 96.5% ± 0.7% |
+| only 1 patch per road            |        5.9 cm | 92.9% ± 0.8% |
+| only 2 patches per road          |        5.9 cm | 94.9% ± 0.6% |
+| only 4 patches per road          |        5.9 cm | 96.1% ± 0.7% |
+| imagery downsampled 2x           |         12 cm | 96.3% ± 1.1% |
+| imagery downsampled 4x           |         23 cm | 94.4% ± 1.9% |
+| imagery downsampled 8x           |         47 cm | 91.8% ± 1.7% |
+| imagery downsampled 16x          |         94 cm | 86.0% ± 2.8% |
+
+The GSD is the patches' effective ground sampling distance: each 15 m patch is cut at 256 px (15 m / 256 px ≈ 5.9 cm per pixel), as in this fAIr pipeline, and the downsampled conditions reduce the patches by the factor before scaling them back up. It is the finest detail the model gets; scenes captured coarser than that carry less.
 
 Macro AUROC under normal use: 99.5% ± 0.3%.
 
 Takeaway: the model is fairly robust to having fewer patches per road (even a single patch only costs ~3.6pp of accuracy) and to moderate resolution loss, but accuracy degrades noticeably once imagery is downsampled 8x or more — treat predictions with more caution on very low-resolution imagery.
+
+## Examples
+
+Prediction of the base model (SUSformer): brown shows unpaved and blue paved roads, the hue shows the model's confidence.
+
+![Example prediction](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/example1.png)
+
+Figures are from the [SUSformer repository](https://github.com/GIScience/Road-surface-classification-for-FAIR/tree/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96) at commit `f92eeb2`.
+
+## Limitations
+
+- **Misalignment between OSM and imagery.** Training and testing only used patches in which enough of the road was visible in the drone imagery. In practice, OSM road geometries and imagery scenes are often misaligned, so patches cut along an OSM way can partly or entirely miss the road. Small offsets degrade predictions; larger mismatches can lead to significantly wrong predictions. Check the alignment of roads and imagery before relying on the output.
+- **Coarser resolutions.** At coarser resolutions the model struggles with narrow roads and dense urban scenes, where a road covers only a few pixels or is hard to separate from its surroundings (see [Reliability under degraded conditions](#reliability-under-degraded-conditions)).
+- **Label coverage.** Roads were labelled only where human labellers could identify the surface without ground reference, either visually from the imagery or from existing OSM tags. Truly hard scenes, where the surface cannot be determined from the imagery, may therefore be missing from both training and testing, and the reported accuracy may not reflect them.
 
 ## How to use
 
@@ -127,6 +157,14 @@ Example feature:
 - **Pooling**: attention pooling over a road's bag of patch encodings, weighting clearer/more informative patches more heavily.
 - **Head**: linear classifier on the pooled representation, the only trainable part during fAIr fine-tuning.
 - **Native patch input**: 256x256 RGB, ~15 m of road per patch.
+
+### Model size
+
+- **Parameters:** 21.69 M (encoder, attention pooling and classifier head)
+- **Compute:** 5.62 GMACs (about 11.2 GFLOPs, counting one multiply-add as two FLOPs) per patch; a road of 4 patches takes 22.5 GMACs
+- **Inference input:** `float32` tensor of `patches × 3 × 256 × 256`, the bag of 1 to 4 patches of one road; inference runs one road at a time
+- **CPU inference:** about 30 ms per road with 1 patch, about 109 ms with 4 patches (median, ONNX)
+- **Memory and benchmark host:** about 359 MiB memory usage after model warm-up; Intel Core Ultra 7 255H (16 logical CPUs), CPU ONNX Runtime
 
 ## License
 
