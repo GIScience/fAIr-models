@@ -7,6 +7,7 @@ from zenml import log_metadata, pipeline, step
 
 from fair.zenml.instrumentation import log_evaluation_results, mlflow_training_context
 from fair.zenml.materializers import ONNXMaterializer
+from fair.zenml.metrics import log_loss_history
 
 CLASS_NAMES = ("unpaved", "paved")
 
@@ -18,10 +19,14 @@ MATERIALIZE_SEED = 0
 DINOV3_LICENSE = Path(__file__).with_name("LICENSE-DINOv3.md")
 
 RAW_DATA_API_URL = "https://api-prod.raw-data.hotosm.org/v1"
-# Roads to classify, as STAC `label:classes` (see fair.datasets._osm_filters); "*" matches any highway value.
-ROAD_LABEL_CLASSES = [{"name": "highway", "classes": ["*"]}]
 
-PATCH_CONFIG_KWARGS = {
+HIGHWAY_VALUES = (
+    "motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,"
+    "unclassified,residential,living_street,service,track,road,footway,path,pedestrian,cycleway,bridleway"
+)
+EXCLUDE_TAGS = "footway=sidewalk,footway=crossing"
+
+PATCH_CONFIG_KWARGS: dict[str, Any] = {
     "patch_size_m": 15.0,
     "patch_size_px": 256,
     "meters_per_patch": 20.0,
@@ -57,7 +62,7 @@ PATCH_CONFIG_KWARGS = {
 }
 
 # Inference / evaluation: one bag centred along the road (same patch budget), cut on the road centreline.
-INFERENCE_PATCH_CONFIG_KWARGS = {
+INFERENCE_PATCH_CONFIG_KWARGS: dict[str, Any] = {
     **PATCH_CONFIG_KWARGS,
     "n_bags": 1,
     "lateral_jitter_m": 0.0,
@@ -99,7 +104,6 @@ def load_labelled_roads(dataset_labels: str, id_column: str) -> Any:
 
     lines = load_lines(resolve_directory(dataset_labels, "*.geojson") / "labels.geojson", "EPSG:4326")
     roads = roads_to_cut(lines, LABEL_COLUMN).rename_axis("road_id").reset_index()
-    # roads_to_cut only keeps the row of the labels each road was cut from (`source_row`), so take the id from there.
     roads[id_column] = roads["source_row"].map(lines.drop_duplicates("source_row").set_index("source_row")[id_column])
     return roads.drop(columns="source_row").astype({LABEL_COLUMN: int})
 
@@ -141,8 +145,8 @@ def materialize(
 def road_subset(dataset: Any, road_ids: list) -> Any:
     from torch.utils.data import Subset
 
-    road_ids = set(road_ids)
-    return Subset(dataset, [i for i, road_id in enumerate(dataset.roads["road_id"]) if road_id in road_ids])
+    wanted = set(road_ids)
+    return Subset(dataset, [i for i, road_id in enumerate(dataset.roads["road_id"]) if road_id in wanted])
 
 
 def even_clusters(xy: Any, n_clusters: int) -> Any:
@@ -240,16 +244,16 @@ def evaluate_dataset(model: Any, dataset: Any, device: str) -> tuple:
     return loss, (logits.argmax(1) == labels).float().mean().item()
 
 
-def train_classifier(
+def finetune(
     model: Any,
     train_dataset: Any,
     val_dataset: Any,
     replay_features: list,
     replay_labels: Any,
-    steps: int,
+    epochs: int,
+    batch_size: int,
     replay_bags_per_step: int,
     learning_rate: float,
-    val_every: int,
     device: str,
 ) -> None:
     import mlflow
@@ -260,33 +264,39 @@ def train_classifier(
     optimizer = torch.optim.AdamW(
         model.classifier.parameters(), lr=learning_rate, weight_decay=model.hparams.weight_decay
     )
-    for step_index in range(1, steps + 1):
-        images, sizes, labels = collate_bags([train_dataset[i] for i in range(len(train_dataset))])
-        replay = torch.randint(len(replay_labels), (replay_bags_per_step,))
-        replay_pooled = torch.stack([model.pool(replay_features[i].to(device))[0] for i in replay.tolist()])
-        logits = torch.cat([model(images.to(device), sizes)[0], model.classifier(replay_pooled)])
-        labels = torch.cat([labels, replay_labels[replay]]).to(device)
-        loss = F.cross_entropy(
-            logits, labels, weight=model.class_weights, label_smoothing=model.hparams.label_smoothing
-        )
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.classifier.parameters(), 1.0)
-        optimizer.step()
-        mlflow.log_metric("train_loss", loss.item(), step=step_index)  # ty: ignore[possibly-missing-attribute]
+    train_losses, val_losses = [], []
+    step = 0
+    for _ in range(epochs):
+        epoch_losses = []
+        order = torch.randperm(len(train_dataset)).tolist()
+        for start in range(0, len(order), batch_size):
+            images, sizes, labels = collate_bags([train_dataset[i] for i in order[start : start + batch_size]])
+            replay = torch.randint(len(replay_labels), (replay_bags_per_step,))
+            replay_pooled = torch.stack([model.pool(replay_features[i].to(device))[0] for i in replay.tolist()])
+            logits = torch.cat([model(images.to(device), sizes)[0], model.classifier(replay_pooled)])
+            labels = torch.cat([labels, replay_labels[replay]]).to(device)
+            loss = F.cross_entropy(
+                logits, labels, weight=model.class_weights, label_smoothing=model.hparams.label_smoothing
+            )
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.classifier.parameters(), 1.0)
+            optimizer.step()
+            step += 1
+            mlflow.log_metric("train_loss", loss.item(), step=step)  # ty: ignore[possibly-missing-attribute]
+            epoch_losses.append(loss.item())
 
-        if step_index % val_every == 0 or step_index == steps:
-            val_loss, val_accuracy = evaluate_dataset(model, val_dataset, device)
-            mlflow.log_metric("val_loss", val_loss, step=step_index)  # ty: ignore[possibly-missing-attribute]
-            mlflow.log_metric("val_accuracy", val_accuracy, step=step_index)  # ty: ignore[possibly-missing-attribute]
+        val_loss, val_accuracy = evaluate_dataset(model, val_dataset, device)
+        mlflow.log_metrics({"val_loss": val_loss, "val_accuracy": val_accuracy}, step=step)  # ty: ignore[possibly-missing-attribute]
+        train_losses.append(sum(epoch_losses) / len(epoch_losses))
+        val_losses.append(val_loss)
+    log_loss_history(train_losses, val_losses)
 
 
-def fetch_roads(bbox: list[float]) -> Any:
-    """OSM road ways intersecting `bbox` from the HOT raw-data API, whole and unclipped, with `osm_id` and `highway`."""
+def fetch_roads(bbox: list[float], highway_values: list[str], exclude_tags: list[str]) -> Any:
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
-    import geopandas as gpd
     from geomltoolkits.downloader.osm import download_osm_data
 
     from fair.datasets import _osm_filters
@@ -294,16 +304,26 @@ def fetch_roads(bbox: list[float]) -> Any:
     download = download_osm_data(
         bbox=bbox,
         api_url=RAW_DATA_API_URL,
-        filters=_osm_filters(ROAD_LABEL_CLASSES, "line"),
+        filters=_osm_filters([{"name": "highway", "classes": highway_values}], "line"),
         geometry_types=["line"],
         use_st_within=False,  # ST_Intersects: keep the roads crossing the AOI edge
     )
     with ThreadPoolExecutor(1) as pool:
         osm = pool.submit(asyncio.run, download).result()
+    return validated_roads(osm, highway_values, exclude_tags)
+
+
+def validated_roads(osm: Any, highway_values: list[str], exclude_tags: list[str]) -> Any:
+    import geopandas as gpd
 
     roads = gpd.GeoDataFrame.from_features(osm, crs="EPSG:4326", columns=["geometry", "osm_id", "osm_type", "tags"])
-    roads = roads[roads["osm_type"] == "ways_line"]
-    return roads.assign(highway=roads["tags"].str.get("highway"))[["geometry", "osm_id", "highway"]]
+    roads = roads[roads["osm_type"] == "ways_line"].assign(highway=roads["tags"].str.get("highway"))
+    excluded = roads["tags"].apply(lambda tags: any(f"{key}={value}" in exclude_tags for key, value in tags.items()))
+    roads = roads[roads["highway"].isin(highway_values) & ~excluded][["geometry", "osm_id", "highway"]]
+    if roads.empty:
+        msg = f"No OSM roads to classify: none in highway_values {highway_values} without exclude_tags {exclude_tags}"
+        raise ValueError(msg)
+    return roads
 
 
 def predict(session: Any, input_images: str, params: dict) -> dict:
@@ -323,19 +343,19 @@ def predict(session: Any, input_images: str, params: dict) -> dict:
 
         utm = footprint.estimate_utm_crs()
         clip_area = footprint.to_crs(utm).buffer(-INFERENCE_PATCH_CONFIG_KWARGS["patch_size_m"] / 2)
-        roads = fetch_roads(list(footprint.to_crs(4326).total_bounds))
+        highway_values = params.get("highway_values", HIGHWAY_VALUES).split(",")
+        exclude_tags = params.get("exclude_tags", EXCLUDE_TAGS).split(",")
+        roads = fetch_roads(list(footprint.to_crs(4326).total_bounds), highway_values, exclude_tags)
         roads = roads.to_crs(utm).clip(clip_area, keep_geom_type=True).explode(ignore_index=True).to_crs(4326)
 
         labels_dir = work_dir / "labels"
         labels_dir.mkdir()
         roads.to_file(labels_dir / "labels.geojson", driver="GeoJSON")
-        # The mosaic is the only .tif in work_dir, so materialize cuts from it without merging again.
         dataset_dir = materialize(
             str(work_dir), str(labels_dir), work_dir, INFERENCE_PATCH_CONFIG_KWARGS, label_column=None
         )
         scene_dir = dataset_dir / SCENE_ID
 
-        # Every row of `roads` is a LineString, so materialize keeps them all in order: road_id is the row of `roads`.
         patches = pd.read_parquet(scene_dir / PATCHES_FILENAME, columns=["road_id", "slot", "path"])
         logits = {}
         for road_id, road_patches in patches.sort_values("slot").groupby("road_id"):
@@ -455,24 +475,23 @@ def train_model(
     replay_features, replay_labels = replay_bags(bank)
     model.to(device)
 
-    # Gate: keep the base model if it already gets the scene's labelled roads (all splits) right.
-    all_road_ids = train_road_ids + val_road_ids + test_road_ids
-    _, base_accuracy = evaluate_dataset(model, load_dataset(dataset_dir, all_road_ids, split_info["seed"]), device)
-    mlflow.log_metric("base_accuracy", base_accuracy)  # ty: ignore[possibly-missing-attribute]
-    if base_accuracy >= hyperparameters.get("gate_accuracy", 0.9):
-        return model.cpu()
-
     with mlflow_training_context(hyperparameters, model_name, base_model_id, dataset_id):
-        train_classifier(
+        all_road_ids = train_road_ids + val_road_ids + test_road_ids
+        _, base_accuracy = evaluate_dataset(model, load_dataset(dataset_dir, all_road_ids, split_info["seed"]), device)
+        mlflow.log_metric("base_accuracy", base_accuracy)  # ty: ignore[possibly-missing-attribute]
+        if base_accuracy >= hyperparameters.get("gate_accuracy", 0.9):
+            return model.cpu()
+
+        finetune(
             model,
             train_dataset,
             val_dataset,
             replay_features,
             replay_labels,
-            steps=hyperparameters.get("steps", 200),
+            epochs=hyperparameters.get("epochs", 10),
+            batch_size=hyperparameters.get("batch_size", 8),
             replay_bags_per_step=hyperparameters.get("replay_bags_per_step", 20),
             learning_rate=hyperparameters.get("learning_rate", 1e-3),
-            val_every=hyperparameters.get("val_every", 20),
             device=device,
         )
 

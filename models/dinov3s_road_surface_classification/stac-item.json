@@ -208,20 +208,21 @@
       }
     },
     "mlm:hyperparameters": {
-      "training.epochs": 1,
+      "training.epochs": 10,
       "training.val_ratio": 0.2,
       "training.test_ratio": 0.2,
-      "training.val_every": 20,
       "training.split_seed": 42,
       "training.id_column": "osm_id",
       "training.n_clusters": 10,
-      "training.steps": 200,
+      "training.batch_size": 8,
       "training.learning_rate": 0.001,
       "training.gate_accuracy": 0.9,
       "training.replay_bags_per_step": 20,
       "training.encoder_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/dinov3_encoder.zip",
       "training.replay_bank_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/replay_bank_2000_features.pt",
-      "inference.confidence_threshold": 0.5
+      "inference.confidence_threshold": 0.5,
+      "inference.highway_values": "motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential,living_street,service,track,road,footway,path,pedestrian,cycleway,bridleway",
+      "inference.exclude_tags": "footway=sidewalk,footway=crossing"
     },
     "fair:split_spec": {
       "strategy": "spatial",
@@ -234,10 +235,10 @@
       {
         "key": "epochs",
         "type": "int",
-        "default": 1,
+        "default": 10,
         "min": 1,
-        "max": 1,
-        "description": "Required by fAIr; the fine-tuning length is set by steps (step 2)."
+        "max": 100,
+        "description": "Passes over the train roads (one random bag per road each time); val loss and accuracy are logged after every epoch."
       },
       {
         "key": "val_ratio",
@@ -270,14 +271,6 @@
         "description": "Share of the labelled roads held out as test; used only by evaluate_model."
       },
       {
-        "key": "val_every",
-        "type": "int",
-        "default": 20,
-        "min": 1,
-        "max": 2000,
-        "description": "Steps between validation runs on the val roads during fine-tuning."
-      },
-      {
         "key": "n_clusters",
         "type": "int",
         "default": 10,
@@ -286,12 +279,12 @@
         "description": "Number of equal-size spatial clusters of the road ids; whole clusters go to train, val and test, so each cluster is one share step (10 clusters = 10% steps). Fewer clusters = stronger spatial separation."
       },
       {
-        "key": "steps",
+        "key": "batch_size",
         "type": "int",
-        "default": 200,
+        "default": 8,
         "min": 1,
-        "max": 2000,
-        "description": "Fine-tuning steps of the classifier head; each step sees every train road once plus replay bags."
+        "max": 256,
+        "description": "Train roads per batch (one optimizer step), with one random bag (1-4 patches) each; an epoch takes ceil(train roads / batch_size) batches, the last one can be smaller. Replay bags come on top."
       },
       {
         "key": "learning_rate",
@@ -315,7 +308,7 @@
         "default": 20,
         "min": 1,
         "max": 100,
-        "description": "Replay bank bags (half per class) mixed into every step, so the head keeps working on the base training scenes."
+        "description": "Replay bank bags (half per class) mixed into every batch, so the head keeps working on the base training scenes."
       },
       {
         "key": "encoder_uri",
@@ -336,6 +329,18 @@
         "min": 0.5,
         "max": 0.99,
         "description": "Below this softmax confidence a road is classed unknown."
+      },
+      {
+        "key": "highway_values",
+        "type": "str",
+        "default": "motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential,living_street,service,track,road,footway,path,pedestrian,cycleway,bridleway",
+        "description": "Comma-separated OSM highway values of the ways to classify; only these are fetched from OSM and predicted. The default covers roads, tracks and smaller ways (footway, path, pedestrian, cycleway, bridleway) and leaves out steps, corridors, platforms and ways under construction."
+      },
+      {
+        "key": "exclude_tags",
+        "type": "str",
+        "default": "footway=sidewalk,footway=crossing",
+        "description": "Comma-separated key=value OSM tags; ways carrying any of them are not classified. The default leaves out sidewalks and crossings mapped as separate footways."
       }
     ]
   },
