@@ -13,7 +13,9 @@ from shapely.geometry import LineString, mapping
 CHIP_SIZE = 256
 GRID = 2
 RESOLUTION_M = 0.3
-ORIGIN_X, ORIGIN_Y = 9_518_000.0, 3_201_000.0  # EPSG:3857, upper left of the chip grid
+# EPSG:3857, upper left of the chip grid. predict fetches the real OSM roads of the chips' footprint, so this sits in
+# Banepa (inside the CI smoke-test bbox) where about 14 residential, unclassified, track and path ways are mapped.
+ORIGIN_X, ORIGIN_Y = 9_520_000.0, 3_203_000.0
 EXTENT_M = GRID * CHIP_SIZE * RESOLUTION_M
 
 # Parallel roads 17 m apart (label 0 unpaved, 1 paved) and one unlabelled cross street (junction context only).

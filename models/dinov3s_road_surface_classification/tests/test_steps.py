@@ -110,6 +110,61 @@ def test_materialize_inference_config(toy_chips: Path, toy_labels: Path, tmp_pat
     assert patches.groupby("road_id").size().max() <= INFERENCE_PATCH_CONFIG_KWARGS["max_patches_per_road"]
 
 
+def test_fetch_roads_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    import geomltoolkits.downloader.osm as osm
+
+    from models.dinov3s_road_surface_classification.pipeline import fetch_roads
+
+    hyperparameters = json.loads((Path(__file__).parents[1] / "stac-item.json").read_text())["properties"][
+        "mlm:hyperparameters"
+    ]
+    highway_values = hyperparameters["inference.highway_values"].split(",")
+    exclude_tags = hyperparameters["inference.exclude_tags"].split(",")
+    ways = {
+        1: {"highway": "residential"},
+        2: {"highway": "track"},
+        3: {"highway": "footway"},
+        4: {"highway": "path"},
+        5: {"highway": "footway", "footway": "sidewalk"},
+        6: {"highway": "footway", "footway": "crossing"},
+        7: {"highway": "steps"},
+        8: {"highway": "corridor"},
+        9: {"highway": "pedestrian"},
+    }
+    requests = []
+
+    async def fake_download(**kwargs: Any) -> dict:
+        requests.append(kwargs)
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "LineString", "coordinates": [[0.0, 0.0], [0.001, 0.001]]},
+                    "properties": {"osm_id": osm_id, "osm_type": "ways_line", "tags": tags},
+                }
+                for osm_id, tags in ways.items()
+            ],
+        }
+
+    monkeypatch.setattr(osm, "download_osm_data", fake_download)
+    roads = fetch_roads([0.0, 0.0, 0.001, 0.001], highway_values, exclude_tags)
+
+    # Roads, tracks, footways, paths and pedestrian ways are kept; sidewalks, crossings, steps, corridors are not.
+    assert sorted(roads["osm_id"]) == [1, 2, 3, 4, 9]
+    assert requests[0]["filters"] == {"tags": {"line": {"join_or": {"highway": highway_values}}}}
+
+    # Nothing left to classify (only sidewalks and steps, or no ways at all) raises.
+    ways = {5: ways[5], 7: ways[7]}
+    with pytest.raises(ValueError, match="No OSM roads to classify"):
+        fetch_roads([0.0, 0.0, 0.001, 0.001], highway_values, exclude_tags)
+    ways = {}
+    with pytest.raises(ValueError, match="No OSM roads to classify"):
+        fetch_roads([0.0, 0.0, 0.001, 0.001], highway_values, exclude_tags)
+
+
 def test_checkpoints_match_replay_bank(example_pair: dict) -> None:
     import torch
     from road_surface_classifier.model import load_model
@@ -128,7 +183,7 @@ def test_checkpoints_match_replay_bank(example_pair: dict) -> None:
 @pytest.fixture()
 def example_inputs(example_pair: dict, base_hyperparameters: dict, tmp_path: Path) -> dict:
     """Step inputs for the example pair, with the real weights (encoder zipped like the released dinov3_encoder.zip)
-    and a 5-step fine-tune."""
+    and a 2-epoch fine-tune."""
     import zipfile
 
     from models.dinov3s_road_surface_classification.pipeline import DINOV3_LICENSE, split_dataset
@@ -142,8 +197,7 @@ def example_inputs(example_pair: dict, base_hyperparameters: dict, tmp_path: Pat
         **base_hyperparameters,
         "encoder_uri": str(encoder_zip),
         "replay_bank_uri": str(weights / "replay_bank_2000_features.pt"),
-        "steps": 5,
-        "val_every": 2,
+        "epochs": 2,
     }
     data = {"dataset_chips": str(example_pair["chips"]), "dataset_labels": str(example_pair["labels"])}
     return {
@@ -168,11 +222,56 @@ def test_train_model(example_pair: dict, example_inputs: dict) -> None:
     skipped = train_model.entrypoint(**{**inputs, "hyperparameters": {**hyperparameters, "gate_accuracy": 0.0}})
     assert all(torch.equal(value, skipped.state_dict()[key]) for key, value in base.items())
 
-    # Gate forced to fail: the full model comes back, with only the classifier changed.
     tuned = train_model.entrypoint(**{**inputs, "hyperparameters": {**hyperparameters, "gate_accuracy": 1.01}})
     assert tuned.hparams.trainable == "classifier"
     for key, value in base.items():
         assert torch.equal(value, tuned.state_dict()[key]) != key.startswith("classifier."), key
+
+
+def test_train_model_batch_size_and_monitoring(
+    example_pair: dict, example_inputs: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each epoch passes over the train roads in batches of batch_size, with one validation per epoch."""
+    import road_surface_classifier.data.dataset as rsc_dataset
+
+    from models.dinov3s_road_surface_classification import pipeline
+
+    collate, evaluate = rsc_dataset.collate_bags, pipeline.evaluate_dataset
+    evaluating, train_batches, loss_histories = [], [], []
+
+    def tracked_evaluate(*args: Any) -> tuple:
+        evaluating.append(True)
+        try:
+            return evaluate(*args)
+        finally:
+            evaluating.pop()
+
+    def tracked_collate(bags: list) -> Any:
+        if not evaluating:
+            train_batches.append(len(bags))
+        return collate(bags)
+
+    monkeypatch.setattr(pipeline, "evaluate_dataset", tracked_evaluate)
+    monkeypatch.setattr(rsc_dataset, "collate_bags", tracked_collate)
+    monkeypatch.setattr(pipeline, "log_loss_history", lambda train, val: loss_histories.append((train, val)))
+    inputs = {**example_inputs, "base_model_weights": str(example_pair["weights"] / "head.pt")}
+
+    def train(**overrides: Any) -> None:
+        train_batches.clear()
+        loss_histories.clear()
+        hyperparameters = {**example_inputs["hyperparameters"], "gate_accuracy": 1.01, **overrides}
+        pipeline.train_model.entrypoint(**{**inputs, "hyperparameters": hyperparameters})
+
+    # More than there are train roads: one batch of all of them per epoch, validated after each of the 2 epochs.
+    train(batch_size=256)
+    n_roads = train_batches[0]
+    assert train_batches == [n_roads] * 2
+    ((train_loss, val_loss),) = loss_histories
+    assert len(train_loss) == len(val_loss) == 2
+
+    # Batches of 2 roads, the last one smaller when the count is odd.
+    train(batch_size=2)
+    assert train_batches == [min(2, n_roads - start) for start in range(0, n_roads, 2)] * 2
 
 
 def test_evaluate_model(example_pair: dict, example_inputs: dict) -> None:
@@ -222,4 +321,4 @@ def test_export_onnx(example_pair: dict) -> None:
         with torch.no_grad():
             expected = model(images, [n_patches])[0].numpy()
         (logits,) = session.run(None, {"image": images.numpy()})
-        np.testing.assert_allclose(logits, expected, atol=1e-4)
+        np.testing.assert_allclose(np.asarray(logits), expected, atol=1e-4)
