@@ -106,13 +106,13 @@ Fine-tuning takes two directories (local paths or `s3://` prefixes):
 
 - `dataset_chips`: GeoTIFF imagery (`*.tif`) covering the labelled roads; several chips are mosaicked into one scene.
 - `dataset_labels`: a single `labels.geojson` with the roads, following this contract:
-
-| Field                       | Required | Contract                                                                                                                                                                                                                                                                                     |
-|-----------------------------| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| geometry                    | yes      | `LineString` or `MultiLineString` road centrelines; other geometry types are dropped.                                                                                                                                                                                                        |
-| `label`                     | yes      | Integer surface class: `0` = unpaved, `1` = paved. Leave it empty (`null`) for roads you don't label: they are not trained or evaluated on, but still count as road network for junctions. No other values are accepted (collapse SUSformer's 3-class `2` = `paved_segmental` to `1` first). |
-| `osm_id` or defined Road id | yes      | Road id (the column is set by the `id_column` hyperparameter). All features with the same id stay in the same split, so pieces of one OSM way never leak between train, val and test.                                                                                                        |
-| `highway`                   | no       | OSM `highway` value. Lines tagged `footway`, `path`, `cycleway`, `steps`, `pedestrian`, `corridor`, `platform`, `construction` (and other non-carriageway values) are not treated as junctions when patches are placed.                                                                      |
+  oxfm
+  | Field | Required | Contract |
+  | --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | geometry | yes | `LineString` or `MultiLineString` road centrelines; other geometry types are dropped. |
+  | `label` | yes | Integer surface class: `0` = unpaved, `1` = paved. Leave it empty (`null`) for roads you don't label: they are not trained or evaluated on, but still count as road network for junctions. No other values are accepted (collapse SUSformer's 3-class `2` = `paved_segmental` to `1` first). |
+  | `osm_id` or defined Road id | yes | Road id (the column is set by the `id_column` hyperparameter). All features with the same id stay in the same split, so pieces of one OSM way never leak between train, val and test. |
+  | `highway` | no | OSM `highway` value. Lines tagged `footway`, `path`, `cycleway`, `steps`, `pedestrian`, `corridor`, `platform`, `construction` (and other non-carriageway values) are not treated as junctions when patches are placed. |
 
 Example feature:
 

@@ -216,7 +216,7 @@
       "training.n_clusters": 10,
       "training.batch_size": 8,
       "training.learning_rate": 0.001,
-      "training.gate_accuracy": 0.9,
+      "training.gate_accuracy": 0.95,
       "training.replay_bags_per_step": 20,
       "training.encoder_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/dinov3_encoder.zip",
       "training.replay_bank_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/replay_bank_2000_features.pt",
@@ -297,7 +297,7 @@
       {
         "key": "gate_accuracy",
         "type": "float",
-        "default": 0.9,
+        "default": 0.95,
         "min": 0.0,
         "max": 1.01,
         "description": "Base-model accuracy on all labelled roads of the scene (train, val and test) at or above which fine-tuning is skipped and the base model is returned."
