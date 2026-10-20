@@ -1,10 +1,12 @@
 # dinov3s-road-surface
 
+## Overview
+
 Classifies the surface of mapped roads as paved or unpaved from aerial and drone imagery. It does not find roads: it needs the road geometries (OSM ways) together with the imagery and assigns a surface class to each of them. For every road, the model cuts up to four small image patches at points along the road line and judges the road from all of them together, so one patch where the road is hidden by a tree or a building doesn't decide the result (see [How the bagging approach works](#how-the-bagging-approach-works)).
 
 The model is a DINOv3 ViT-S/16 encoder with attention pooling and a linear classifier head, trained with multi-instance learning on these bags of patches. It packages [SUSformer](https://github.com/GIScience/Road-surface-classification-for-FAIR) ("Surface from UAV Scenery") by HeiGIT for fAIr. Meta's [DINOv3](https://arxiv.org/abs/2508.10104) is pretrained on general imagery; for SUSformer, HeiGIT fine-tuned the encoder on labelled road patches from 124 OpenAerialMap scenes so that its features capture road surfaces better than the stock weights do.
 
-## Summary
+### Summary
 
 |           |                                                                                                               |
 | --------- | ------------------------------------------------------------------------------------------------------------- |
@@ -44,6 +46,22 @@ In this fAIr packaging, bags are cut by `road_surface_classifier.data.materializ
 - Patches too close to junctions (7.5 m clearance) or to a road's endpoints (10% margin) are avoided; junction clearance ignores minor highway values (`footway`, `path`, `cycleway`, `steps`, etc.).
 
 ![Patches of one road with augmentation](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/patches_with_augmentation.png)
+
+## Pretrained source
+
+The encoder starts from Meta's DINOv3 ViT-S/16, pretrained on the LVD-1689M image collection (Siméoni et al., 2025, see [Citation](#citation)). For SUSformer, HeiGIT fine-tuned this encoder on labelled road patches and trained the attention pooling and the linear classifier head on the same data. Code and training setup are released as Global SUSformer 1.0.0 (Szamek and Langer, 2026, [doi:10.5281/zenodo.23396797](https://doi.org/10.5281/zenodo.23396797)).
+
+### Training dataset
+
+The training dataset consists of 124 OpenAerialMap scenes, mostly drone captures with a smaller share of high-resolution satellite imagery. The scenes cover most world regions; regions without usable OAM scenes remain gaps. For every scene, the OSM `highway=*` ways within its footprint were fetched through HeiGIT's ohsome API, and a small team labelled 4,649 road segments by hand in QGIS. The labels follow three classes (`unpaved`, `paved_continuous`, `paved_segmental`), which this model merges into two (see [Classes](#classes)). The OSM `surface` tag served as a hint during labelling but not as ground truth. Class shares, the regional distribution and the image resolutions are shown under [Training data](#training-data).
+
+### Training setup
+
+SUSformer trains the complete network, encoder included, on bags cut once offline from the labelled roads. Each road gets five bags of 15 m patches at 256 × 256 px, cut with lateral and bearing jitter, and the patches receive pixel-level augmentation during training. Training uses AdamW (weight decay 0.05) with a one-cycle learning-rate schedule peaking at 2e-4. A layer-wise decay of 0.9 lowers the learning rate towards the input layers of the encoder, which stays frozen for the first five epochs. The loss is class-weighted cross-entropy with a label smoothing of 0.1, each batch holds 32 bags, and an exponential moving average of the weights (decay 0.995) is used for validation and for the saved checkpoints. Training runs for up to 100 epochs with early stopping, and the last ten epochs use complete, unaugmented bags, so that the model settles on bags like those it sees at inference. The accuracies under [Reliability under degraded conditions](#reliability-under-degraded-conditions) come from a 5-fold cross-validation split by scene (seed 42), so roads of a validation scene never appear in the training folds of that split. The released model was then trained on all 124 scenes with the same setup.
+
+### Data license
+
+The imagery comes from the Open Imagery Network behind OpenAerialMap and is licensed CC BY 4.0, with attribution to the contributors of the Open Imagery Network. The road geometries are OSM ways (© OpenStreetMap contributors, ODbL), to which the SUSformer labellers assigned the surface classes by hand. <!-- TODO: state the license of the SUSformer surface labels --> The fine-tuned encoder weights are a derivative of DINOv3 and fall under the DINOv3 License (see [License](#license)).
 
 ## Training data
 
@@ -98,7 +116,7 @@ Prediction of the base model (SUSformer): brown shows unpaved and blue paved roa
 - Coarse imagery: the training scenes go up to about 30 cm GSD and none are coarser; most are far finer, around 4–5 cm. Training and evaluation at coarser resolutions therefore rely mostly on downsampled versions of fine scenes (see [Reliability under degraded conditions](#reliability-under-degraded-conditions)), not on imagery captured that coarse. At lower resolutions the model struggles with narrow roads and dense urban scenes, where a road covers only a few pixels or is hard to separate from its surroundings. The zoom level of the input imagery only matters indirectly: every patch is resampled to 256 px per 15 m of road, so a lower zoom gives the model the same patch size with less detail in it. Use the highest zoom level the imagery offers.
 - Label coverage: roads were labelled only where the labellers could identify the surface without ground reference, either from the imagery or from existing OSM tags. Scenes where the surface cannot be determined from the imagery are probably missing from both training and testing, so the reported accuracy does not cover them.
 
-## How to use
+## Usage
 
 ### Input data
 
@@ -106,29 +124,15 @@ Fine-tuning takes two directories (local paths or `s3://` prefixes):
 
 - `dataset_chips`: GeoTIFF imagery (`*.tif`) covering the labelled roads; several chips are mosaicked into one scene.
 - `dataset_labels`: a single `labels.geojson` with the roads, following this contract:
-  oxfm
-  | Field | Required | Contract |
-  | --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | geometry | yes | `LineString` or `MultiLineString` road centrelines; other geometry types are dropped. |
-  | `label` | yes | Integer surface class: `0` = unpaved, `1` = paved. Leave it empty (`null`) for roads you don't label: they are not trained or evaluated on, but still count as road network for junctions. No other values are accepted (collapse SUSformer's 3-class `2` = `paved_segmental` to `1` first). |
-  | `osm_id` or defined Road id | yes | Road id (the column is set by the `id_column` hyperparameter). All features with the same id stay in the same split, so pieces of one OSM way never leak between train, val and test. |
-  | `highway` | no | OSM `highway` value. Lines tagged `footway`, `path`, `cycleway`, `steps`, `pedestrian`, `corridor`, `platform`, `construction` (and other non-carriageway values) are not treated as junctions when patches are placed. |
 
-Example feature:
+| Field                       | Required | Contract                                                                                                                                                                                                                                                                                     |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry                    | yes      | `LineString` or `MultiLineString` road centrelines; other geometry types are dropped.                                                                                                                                                                                                        |
+| `label`                     | yes      | Integer surface class: `0` = unpaved, `1` = paved. Leave it empty (`null`) for roads you don't label: they are not trained or evaluated on, but still count as road network for junctions. No other values are accepted (collapse SUSformer's 3-class `2` = `paved_segmental` to `1` first). |
+| `osm_id` or defined Road id | yes      | Road id (the column is set by the `id_column` hyperparameter). All features with the same id stay in the same split, so pieces of one OSM way never leak between train, val and test.                                                                                                        |
+| `highway`                   | no       | OSM `highway` value. Lines tagged `footway`, `path`, `cycleway`, `steps`, `pedestrian`, `corridor`, `platform`, `construction` (and other non-carriageway values) are not treated as junctions when patches are placed.                                                                      |
 
-```json
-{
-  "type": "Feature",
-  "properties": { "osm_id": 123456789, "highway": "residential", "label": 1 },
-  "geometry": {
-    "type": "LineString",
-    "coordinates": [
-      [85.5201, 27.6301],
-      [85.5209, 27.6305]
-    ]
-  }
-}
-```
+A minimal feature is a `LineString` with the properties `osm_id`, `highway` and `label`, for example a residential road (`highway` `residential`) labelled as paved (`label` 1).
 
 ### Fine-tuning (`training_pipeline`)
 
@@ -142,6 +146,10 @@ Example feature:
 - MLflow, per step: `train_loss` (train roads plus replay bags).
 - MLflow, after every epoch: `val_loss` and `val_accuracy`, and once per run the gate's `base_accuracy`. The gate check runs inside the training run, so a run that keeps the base model still shows up with its parameters.
 - Loss history: one point per epoch (mean train loss over its batches, val loss). Promotion publishes it as the local model's training metrics.
+
+### Running locally
+
+The local stack of this repository (`just setup`) runs the full cycle for this model. `just example dinov3s_road_surface_classification` registers the base model, fine-tunes it with the training pipeline on a sample dataset and runs inference with the result. The sample needs road labels following [Input data](#input-data), since the bundled building sample contains no road lines. `just serve dinov3s_road_surface_classification` starts the inference container on port 8090, which answers `POST /predict` requests naming the ONNX model, a tile source for the imagery, a bounding box and a zoom level. For each request, the container fetches the OSM roads within the bounding box, classifies them and returns a GeoJSON `FeatureCollection` with `class`, `label` and `confidence` per road (parameters under [Inference](#inference)). After `just example`, `just test-serve dinov3s_road_surface_classification` sends such a request against the fine-tuned ONNX file.
 
 ## Hyperparameters
 
