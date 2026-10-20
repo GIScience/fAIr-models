@@ -21,7 +21,7 @@ EXTENT_M = GRID * CHIP_SIZE * RESOLUTION_M
 # Parallel roads 17 m apart (label 0 unpaved, 1 paved) and one unlabelled cross street (junction context only).
 ROAD_LABELS = [0, 1, 0, 1, 0, 1, 0, 1]
 ROAD_COLORS = {0: (150, 110, 70), 1: (90, 90, 95)}
-WEIGHTS_DIR = Path(__file__).resolve().parents[1] / "data"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 _TO_WGS84 = Transformer.from_crs(3857, 4326, always_xy=True)
 
 
@@ -90,21 +90,37 @@ def create_toy_data(root: Path) -> dict:
 
 
 @pytest.fixture(scope="session")
-def example_pair(tmp_path_factory: pytest.TempPathFactory) -> dict:
-    """data/example_pair (one OAM scene + labelled roads) in fAIr's chips/labels layout, plus the real weights in
-    data/. data/ is not part of the image: mount it at the same path to run these tests."""
+def weights(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The head, encoder and replay bank the STAC item points to, downloaded once into fAIr's cache."""
+    import zipfile
+
+    from fair.utils.data import resolve_path
+
+    item = json.loads((DATA_DIR.parent / "stac-item.json").read_text())
+    hyperparameters = item["properties"]["mlm:hyperparameters"]
+    root = tmp_path_factory.mktemp("weights")
+    (root / "head.pt").symlink_to(resolve_path(item["assets"]["checkpoint"]["href"]))
+    with zipfile.ZipFile(resolve_path(hyperparameters["training.encoder_uri"])) as archive:
+        archive.extract("encoder.pt", root)
+    (root / "replay_bank_2000_features.pt").symlink_to(resolve_path(hyperparameters["training.replay_bank_uri"]))
+    return root
+
+
+@pytest.fixture(scope="session")
+def example_pair(tmp_path_factory: pytest.TempPathFactory, weights: Path) -> dict:
+    """data/example_pair (one OAM scene + labelled roads) in fAIr's chips/labels layout, plus the released weights."""
     import geopandas as gpd
 
-    if not (WEIGHTS_DIR / "example_pair").exists():
-        pytest.skip(f"{WEIGHTS_DIR} with example_pair and weights not available")
+    if not (DATA_DIR / "example_pair").exists():
+        pytest.skip(f"{DATA_DIR / 'example_pair'} not available")
     root = tmp_path_factory.mktemp("example_pair")
     (root / "chips").mkdir()
     (root / "labels").mkdir()
-    for tif in (WEIGHTS_DIR / "example_pair").glob("*.tif"):
+    for tif in (DATA_DIR / "example_pair").glob("*.tif"):
         (root / "chips" / tif.name).symlink_to(tif)
-    for gpkg in (WEIGHTS_DIR / "example_pair").glob("*.gpkg"):
+    for gpkg in (DATA_DIR / "example_pair").glob("*.gpkg"):
         gpd.read_file(gpkg).to_file(root / "labels" / "labels.geojson", driver="GeoJSON")
-    return {"chips": root / "chips", "labels": root / "labels", "weights": WEIGHTS_DIR}
+    return {"chips": root / "chips", "labels": root / "labels", "weights": weights}
 
 
 @pytest.fixture(scope="session")
