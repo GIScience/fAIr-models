@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libgdal-dev git \
     && rm -rf /var/lib/apt/lists/*
 
-ARG ROAD_SURFACE_REF=28be8d376443fc3224133c4f9e0a1c673fdf12f0
+ARG ROAD_SURFACE_REF=f1d2547f812063a95dc72dcf2dd56236f7c29716
 ARG FAIR_PY_OPS_VERSION=0.3.6
 # predict() fetches roads with download_osm_data(filters=..., use_st_within=...), added in geomltoolkits 2.1.1.
 ARG GEOMLTOOLKITS_VERSION=2.1.2
@@ -50,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     && rm -rf /var/lib/apt/lists/*
 RUN uv python install 3.13
 WORKDIR /app
-ARG ROAD_SURFACE_REF=28be8d376443fc3224133c4f9e0a1c673fdf12f0
+ARG ROAD_SURFACE_REF=f1d2547f812063a95dc72dcf2dd56236f7c29716
 ARG FAIR_PY_OPS_VERSION=0.3.6
 ARG GEOMLTOOLKITS_VERSION=2.1.2
 # road_surface_classifier without its deps: predict() only uses its patch cutting, not torch/lightning/timm.
