@@ -479,7 +479,7 @@ def train_model(
         all_road_ids = train_road_ids + val_road_ids + test_road_ids
         _, base_accuracy = evaluate_dataset(model, load_dataset(dataset_dir, all_road_ids, split_info["seed"]), device)
         mlflow.log_metric("base_accuracy", base_accuracy)  # ty: ignore[possibly-missing-attribute]
-        if base_accuracy >= hyperparameters.get("gate_accuracy", 0.95):
+        if base_accuracy > hyperparameters.get("gate_accuracy", 0.9):
             return model.cpu()
 
         finetune(

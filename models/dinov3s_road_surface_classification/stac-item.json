@@ -216,10 +216,10 @@
       "training.n_clusters": 10,
       "training.batch_size": 8,
       "training.learning_rate": 0.001,
-      "training.gate_accuracy": 0.95,
+      "training.gate_accuracy": 0.9,
       "training.replay_bags_per_step": 20,
-      "training.encoder_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/dinov3_encoder.zip",
-      "training.replay_bank_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/replay_bank_2000_features.pt",
+      "training.encoder_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/data/weights/dinov3_encoder.zip",
+      "training.replay_bank_uri": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/data/replay_bank_2000_features.pt",
       "inference.confidence_threshold": 0.5,
       "inference.highway_values": "motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential,living_street,service,track,road,footway,path,pedestrian,cycleway,bridleway",
       "inference.exclude_tags": "footway=sidewalk,footway=crossing"
@@ -297,10 +297,10 @@
       {
         "key": "gate_accuracy",
         "type": "float",
-        "default": 0.95,
+        "default": 0.9,
         "min": 0.0,
         "max": 1.01,
-        "description": "Base-model accuracy on all labelled roads of the scene (train, val and test) at or above which fine-tuning is skipped and the base model is returned."
+        "description": "Base-model accuracy on all labelled roads of the scene (train, val and test) above which fine-tuning is skipped and the base model is returned."
       },
       {
         "key": "replay_bags_per_step",
@@ -313,13 +313,13 @@
       {
         "key": "encoder_uri",
         "type": "str",
-        "default": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/dinov3_encoder.zip",
+        "default": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/data/weights/dinov3_encoder.zip",
         "description": "Fine-tuned DINOv3 ViT-S/16 encoder state_dict (DINOv3 License), as encoder.pt or a .zip holding it; loaded with the base head."
       },
       {
         "key": "replay_bank_uri",
         "type": "str",
-        "default": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/replay_bank_2000_features.pt",
+        "default": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/data/replay_bank_2000_features.pt",
         "description": "Replay bank of per-patch encoder features from the base model's training scenes (2000 bags)."
       },
       {
@@ -346,7 +346,7 @@
   },
   "assets": {
     "checkpoint": {
-      "href": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/28be8d376443fc3224133c4f9e0a1c673fdf12f0/data/weights/head.pt",
+      "href": "https://media.githubusercontent.com/media/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/data/weights/head.pt",
       "title": "Pretrained road surface classifier head (attention-MIL pooling + classifier, without the encoder)",
       "type": "application/octet-stream; framework=pytorch",
       "roles": ["mlm:model", "mlm:weights"],
@@ -354,7 +354,7 @@
       "raster:bands": [{ "name": "red" }, { "name": "green" }, { "name": "blue" }]
     },
     "model": {
-      "href": "https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/data/weights/dinov3s_road_surface.onnx",
+      "href": "https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/data/weights/dinov3s_road_surface.onnx",
       "title": "Portable ONNX inference model (base model; DINOv3 License bundled in the file's metadata)",
       "type": "application/octet-stream; framework=onnx",
       "roles": ["mlm:model", "mlm:compiled"],

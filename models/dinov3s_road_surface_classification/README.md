@@ -4,7 +4,7 @@
 
 Classifies the surface of mapped roads as paved or unpaved from aerial and drone imagery. It does not find roads: it needs the road geometries (OSM ways) together with the imagery and assigns a surface class to each of them. For every road, the model cuts up to four small image patches at points along the road line and judges the road from all of them together, so one patch where the road is hidden by a tree or a building doesn't decide the result (see [How the bagging approach works](#how-the-bagging-approach-works)).
 
-The model is a DINOv3 ViT-S/16 encoder with attention pooling and a linear classifier head, trained with multi-instance learning on these bags of patches. It packages [SUSformer](https://github.com/GIScience/Road-surface-classification-for-FAIR) ("Surface from UAV Scenery") by HeiGIT for fAIr. Meta's [DINOv3](https://arxiv.org/abs/2508.10104) is pretrained on general imagery; for SUSformer, HeiGIT fine-tuned the encoder on labelled road patches from 124 OpenAerialMap scenes so that its features capture road surfaces better than the stock weights do.
+The model is a DINOv3 ViT-S/16 encoder with attention pooling and a linear classifier head, trained with multi-instance learning on these bags of patches. It packages [SUSformer](https://github.com/GIScience/Road-surface-classification-for-FAIR) ("Surface from UAV Scenery") by HeiGIT for fAIr. Meta's [DINOv3](https://arxiv.org/abs/2508.10104) is pretrained on general imagery; for SUSformer, HeiGIT fine-tuned the encoder on labelled road patches from 131 OpenAerialMap scenes so that its features capture road surfaces better than the stock weights do.
 
 ### Summary
 
@@ -36,7 +36,7 @@ SUSformer labels roads with three classes. This model merges the two paved ones 
 
 The model classifies a road from several close-up patches taken at different points along it. Together these patches form a "bag" (multi-instance learning), and attention pooling combines them into one decision, giving the clearest patches the most weight. One patch on its own can mislead: a tree or a building may cover the road, or the image may be blurred there.
 
-![Example patches along roads](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/patches_examples.png)
+![Example patches along roads](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/patches_examples.png)
 
 In this fAIr packaging, bags are cut by `road_surface_classifier.data.materialize.materialize_dataset` per labelled road, configured via `PATCH_CONFIG_KWARGS` in `pipeline.py`:
 
@@ -45,7 +45,7 @@ In this fAIr packaging, bags are cut by `road_surface_classifier.data.materializ
 - 5 bags per labelled road, each cut with lateral jitter (1.5 m) and bearing jitter (10°), so the model doesn't depend on exactly where along a road a patch is taken.
 - Patches too close to junctions (7.5 m clearance) or to a road's endpoints (10% margin) are avoided; junction clearance ignores minor highway values (`footway`, `path`, `cycleway`, `steps`, etc.).
 
-![Patches of one road with augmentation](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/patches_with_augmentation.png)
+![Patches of one road with augmentation](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/patches_with_augmentation.png)
 
 ## Pretrained source
 
@@ -53,11 +53,11 @@ The encoder starts from Meta's DINOv3 ViT-S/16, pretrained on the LVD-1689M imag
 
 ### Training dataset
 
-The training dataset consists of 124 OpenAerialMap scenes, mostly drone captures with a smaller share of high-resolution satellite imagery. The scenes cover most world regions; regions without usable OAM scenes remain gaps. For every scene, the OSM `highway=*` ways within its footprint were fetched through HeiGIT's ohsome API, and a small team labelled 4,649 road segments by hand in QGIS. The labels follow three classes (`unpaved`, `paved_continuous`, `paved_segmental`), which this model merges into two (see [Classes](#classes)). The OSM `surface` tag served as a hint during labelling but not as ground truth. Class shares, the regional distribution and the image resolutions are shown under [Training data](#training-data).
+The training dataset consists of 131 OpenAerialMap scenes, mostly drone captures with a smaller share of high-resolution satellite imagery. The scenes cover most world regions; regions without usable OAM scenes remain gaps. For every scene, the OSM `highway=*` ways within its footprint were fetched through HeiGIT's ohsome API, and a small team labelled 4,974 road segments by hand in QGIS. The labels follow three classes (`unpaved`, `paved_continuous`, `paved_segmental`), which this model merges into two (see [Classes](#classes)). The OSM `surface` tag served as a hint during labelling but not as ground truth. Class shares, the regional distribution and the image resolutions are shown under [Training data](#training-data).
 
 ### Training setup
 
-SUSformer trains the complete network, encoder included, on bags cut once offline from the labelled roads. Each road gets five bags of 15 m patches at 256 × 256 px, cut with lateral and bearing jitter, and the patches receive pixel-level augmentation during training. Training uses AdamW (weight decay 0.05) with a one-cycle learning-rate schedule peaking at 2e-4. A layer-wise decay of 0.9 lowers the learning rate towards the input layers of the encoder, which stays frozen for the first five epochs. The loss is class-weighted cross-entropy with a label smoothing of 0.1, each batch holds 32 bags, and an exponential moving average of the weights (decay 0.995) is used for validation and for the saved checkpoints. Training runs for up to 100 epochs with early stopping, and the last ten epochs use complete, unaugmented bags, so that the model settles on bags like those it sees at inference. The accuracies under [Reliability under degraded conditions](#reliability-under-degraded-conditions) come from a 5-fold cross-validation split by scene (seed 42), so roads of a validation scene never appear in the training folds of that split. The released model was then trained on all 124 scenes with the same setup.
+SUSformer trains the complete network, encoder included, on bags cut once offline from the labelled roads. Each road gets five bags of 15 m patches at 256 × 256 px, cut with lateral and bearing jitter, and the patches receive pixel-level augmentation during training. Training uses AdamW (weight decay 0.05) with a one-cycle learning-rate schedule peaking at 5e-5. A layer-wise decay of 0.9 lowers the learning rate towards the input layers of the encoder, which stays frozen for the first five epochs. The loss is class-weighted cross-entropy with a label smoothing of 0.1, each batch holds 32 bags, and an exponential moving average of the weights (decay 0.995) is used for validation and for the saved checkpoints. Training runs for 30 epochs, and the last ten epochs use complete, unaugmented bags, so that the model settles on bags like those it sees at inference. Half of the training patches pass through an emulation of the OAM web tiles that fAIr fetches, so that the model also learns how roads look in served tiles at coarser zoom levels; no real tiles are used in training. The accuracies under [Reliability under degraded conditions](#reliability-under-degraded-conditions) come from a 5-fold cross-validation split by scene (seed 42), so roads of a validation scene never appear in the training folds of that split. The released model was then trained on all 131 scenes with the same setup.
 
 ### Data license
 
@@ -67,48 +67,53 @@ The imagery comes from the Open Imagery Network behind OpenAerialMap and is lice
 
 The base model is trained on SUSformer's labelled catalogue:
 
-![Distribution of the training scenes](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/scenes_distribution.png)
+![Distribution of the training scenes](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/scenes_distribution.png)
 
-124 labelled scenes from OpenAerialMap with 4,649 labelled road segments, spread across the world.
+131 labelled scenes from OpenAerialMap with 4,974 labelled road segments, spread across the world.
 
-The hand labels use three classes: `unpaved` 1,784 (38.4%), `paved_continuous` 2,600 (55.9%) and `paved_segmental` 265 (5.7%). After merging the paved classes, that is 1,784 (38.4%) unpaved and 2,865 (61.6%) paved roads. The training loss is class-weighted cross-entropy to make up for the imbalance. Fine-tuning keeps the base model's class weights, so a new region with a very different class balance may need its own weighting.
+The hand labels use three classes: `unpaved` 1,915 (38.5%), `paved_continuous` 2,752 (55.3%) and `paved_segmental` 307 (6.2%). After merging the paved classes, that is 1,915 (38.5%) unpaved and 3,059 (61.5%) paved roads. The training loss is class-weighted cross-entropy to make up for the imbalance. Fine-tuning keeps the base model's class weights, so a new region with a very different class balance may need its own weighting.
 
-![Labelled roads per World Bank region](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/pie_chart_per_wb_region.png)
+![Labelled roads per World Bank region](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/pie_chart_per_wb_region.png)
 
-![Labels per class and World Bank region](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/labels_per_class_and_wb_region.png)
+![Labels per class and World Bank region](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/labels_per_class_and_wb_region.png)
 
 Most labelled scenes are high-resolution (5 cm and below) UAV imagery, but UAV and satellite imagery with a lower resolution is included too:
 
-![Resolution of the training scenes](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/resolutions.png)
+![Resolution of the training scenes](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/resolutions.png)
 
 For a local fAIr fine-tune, `train_model` instead takes your own `dataset_chips` (imagery) and `dataset_labels` (a `labels.geojson` of roads, see [Input data](#input-data)) and re-materializes bags from those.
 
 ## Reliability under degraded conditions
 
-Upstream macro-balanced accuracy, mean ± std over 5-fold cross-validation, each fold scored on its held-out validation scenes:
+Macro-balanced accuracy, mean ± std over a 5-fold cross-validation split by scene, each fold scored on its held-out validation scenes. Model: B2f_e30 (released recipe, 30 epochs, OAM web-tile emulation on half of the training bags, no real tiles in training).
 
 | condition                        | approx. GSD | accuracy     |
 | -------------------------------- | ----------: | ------------ |
-| normal use (full set of patches) |      5.9 cm | 96.5% ± 0.7% |
-| only 1 patch per road            |      5.9 cm | 92.9% ± 0.8% |
-| only 2 patches per road          |      5.9 cm | 94.9% ± 0.6% |
-| only 4 patches per road          |      5.9 cm | 96.1% ± 0.7% |
-| imagery downsampled 2x           |       12 cm | 96.3% ± 1.1% |
-| imagery downsampled 4x           |       23 cm | 94.4% ± 1.9% |
-| imagery downsampled 8x           |       47 cm | 91.8% ± 1.7% |
-| imagery downsampled 16x          |       94 cm | 86.0% ± 2.8% |
+| normal use (full set of patches) |      5.9 cm | 95.9% ± 1.0% |
+| only 1 patch per road            |      5.9 cm | 92.4% ± 1.0% |
+| only 2 patches per road          |      5.9 cm | 94.7% ± 1.1% |
+| only 4 patches per road          |      5.9 cm | 95.5% ± 1.0% |
+| imagery downsampled 2x           |       12 cm | 95.8% ± 1.1% |
+| imagery downsampled 4x           |       23 cm | 94.5% ± 1.3% |
+| imagery downsampled 8x           |       47 cm | 92.0% ± 2.2% |
+| imagery downsampled 16x          |       94 cm | 86.4% ± 3.2% |
+| real fAIr web tiles, zoom 20     |     ≤ 15 cm | 95.3% ± 1.1% |
+| real fAIr web tiles, zoom 19     |     ≤ 30 cm | 92.2% ± 1.9% |
+| real fAIr web tiles, zoom 18     |     ≤ 60 cm | 88.1% ± 2.0% |
+
+The first eight rows use the training's final evaluation: EMA weights, one validation bag per road and synthetic area downsampling. The web-tile rows use real tiles fetched through the fAIr tile service (OpenAerialMap → titiler, WebMercatorQuad), with the prediction averaged over 3 bags per road. Scored the same way, native imagery reaches 96.3% ± 0.8%.
+
+The web-tile GSD is the tile pixel size at the equator; it is smaller at higher latitudes. The effective resolution of the served tiles is coarser than their pixel size, about 0.8 m at zoom 18, because the tile service renders lower zoom levels from compressed overviews of the scene.
 
 The GSD is the patches' effective ground sampling distance: each 15 m patch is cut at 256 px (15 m / 256 px ≈ 5.9 cm per pixel), as in this fAIr pipeline, and the downsampled conditions reduce the patches by the factor before scaling them back up. It is the finest detail the model gets; scenes captured coarser than that carry less.
 
-Macro AUROC under normal use: 99.5% ± 0.3%.
-
-A single patch per road costs about 3.6 percentage points of accuracy, and 2x or 4x downsampling costs little. From 8x downsampling (about 47 cm GSD) on, accuracy drops clearly, so predictions on imagery that coarse need more checking.
+A single patch per road costs about 3.5 percentage points of accuracy, and 2x or 4x downsampling costs little. From 8x downsampling (about 47 cm GSD) on, accuracy drops clearly. Real web tiles cost more than downsampling to the same pixel size, because they are rendered from compressed overviews: zoom 20 is close to native imagery, zoom 19 costs about 4 points and zoom 18 about 8 points. Request zoom 20 or finer where the imagery allows it, and check predictions from zoom 18 or coarser imagery more carefully.
 
 ## Examples
 
 Prediction of the base model (SUSformer): brown shows unpaved and blue paved roads, the hue shows the model's confidence.
 
-![Example prediction](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f92eeb2b4c7903eaaf34ead8879732b9e38f2c96/images/example1.png)
+![Example prediction](https://raw.githubusercontent.com/GIScience/Road-surface-classification-for-FAIR/f1d2547f812063a95dc72dcf2dd56236f7c29716/images/example1.png)
 
 ## Limitations
 
@@ -137,7 +142,7 @@ A minimal feature is a `LineString` with the properties `osm_id`, `highway` and 
 ### Fine-tuning (`training_pipeline`)
 
 1. `split_dataset` splits the labelled roads into train/val/test by id (`id_column`, default `osm_id`): the ids form `n_clusters` (default 10) spatially compact clusters of equal size by their centroid, and in seeded random order test gets `test_ratio` and val `val_ratio` of the clusters (at least one each), the rest is train; not stratified by class. Defaults: `val_ratio=0.2`, `test_ratio=0.2`, `split_seed=42`.
-2. `train_model` loads the base model (frozen encoder and attention pool, trainable linear classifier) and first checks a gate: if the base model already scores at or above `gate_accuracy` (default 0.95) on all labelled roads in the scene, fine-tuning is skipped and the base model is returned unchanged. Otherwise it fine-tunes the classifier head for `epochs` (default 10) with AdamW at `learning_rate` (default 1e-3). Each epoch is one pass over the train roads in random order, in batches of `batch_size` (default 8) roads with one random bag each; every batch mixes in `replay_bags_per_step` (default 20) bags of cached backbone features from the base model's own training scenes, so the head doesn't drift off the original distribution. It validates after every epoch.
+2. `train_model` loads the base model (frozen encoder and attention pool, trainable linear classifier) and first checks a gate: if the base model already scores above `gate_accuracy` (default 0.90) on all labelled roads in the scene, fine-tuning is skipped and the base model is returned unchanged. Otherwise it fine-tunes the classifier head for `epochs` (default 10) with AdamW at `learning_rate` (default 1e-3). Each epoch is one pass over the train roads in random order, in batches of `batch_size` (default 8) roads with one random bag each; every batch mixes in `replay_bags_per_step` (default 20) bags of cached backbone features from the base model's own training scenes, so the head doesn't drift off the original distribution. It validates after every epoch.
 3. `evaluate_model` reports class-weighted cross-entropy loss and accuracy on the held-out test roads.
 4. `export_onnx` exports the model as one ONNX file (input: one road's bag of 1–4 patches, output: its logits), with the DINOv3 License and "Built with DINOv3" bundled in the file's metadata.
 
@@ -163,7 +168,7 @@ All defaults live in the STAC item (`mlm:hyperparameters`); fAIr passes the `tra
 | `batch_size`           |                                          8 | Train roads per batch (one optimizer step); an epoch is ceil(train roads / `batch_size`) batches, the last one can be smaller       |
 | `learning_rate`        |                                      0.001 | AdamW learning rate for the classifier head (encoder and attention pooling stay frozen)                                             |
 | `replay_bags_per_step` |                                         20 | Bags from the replay bank mixed into every batch, so the head keeps working on the base model's training scenes                     |
-| `gate_accuracy`        |                                       0.95 | If the base model already reaches this accuracy on all labelled roads of the scene, fine-tuning is skipped and the base model kept  |
+| `gate_accuracy`        |                                       0.90 | If the base model already exceeds this accuracy on all labelled roads of the scene, fine-tuning is skipped and the base model kept  |
 | `val_ratio`            |                                        0.2 | Share of the road clusters held out for validation                                                                                  |
 | `test_ratio`           |                                        0.2 | Share of the road clusters held out for testing (used only by `evaluate_model`)                                                     |
 | `id_column`            |                                   `osm_id` | Label column identifying a road; all features with the same id stay in the same split                                               |
@@ -174,7 +179,7 @@ All defaults live in the STAC item (`mlm:hyperparameters`); fAIr passes the `tra
 
 An epoch shows every train road once, with one of its 5 pre-cut bags picked at random and augmented, so 10 epochs show each bag about twice. `batch_size` sets how many roads go into one optimizer step: with 320 train roads and the default 8, an epoch is 40 steps and the default fine-tune 400 steps. Fewer train roads mean fewer steps per epoch. If fine-tuning on a small scene barely changes the model, lower `batch_size` instead of raising `epochs`: that adds updates while each bag is still seen only about twice. Each road costs up to 4 encoder passes, so `batch_size` also bounds the time and memory per step. The replay bags are added on top, so a small `batch_size` with the default 20 replay bags weighs the base scenes more.
 
-Keep `epochs` and `learning_rate` low. Fine-tuning in fAIr sees the labelled roads of a single scene. More epochs or a higher learning rate make the head fit that one scene and drift away from what it learned on the 124 base scenes, so predictions elsewhere get worse. Watch `val_loss` per epoch in MLflow: if it rises while `train_loss` keeps falling, use fewer epochs. The replay bags and the accuracy gate work against this drift as well: raise `replay_bags_per_step` to stay closer to the base model, lower it to adapt more to the new scene.
+Keep `epochs` and `learning_rate` low. Fine-tuning in fAIr sees the labelled roads of a single scene. More epochs or a higher learning rate make the head fit that one scene and drift away from what it learned on the 131 base scenes, so predictions elsewhere get worse. Watch `val_loss` per epoch in MLflow: if it rises while `train_loss` keeps falling, use fewer epochs. The replay bags and the accuracy gate work against this drift as well: raise `replay_bags_per_step` to stay closer to the base model, lower it to adapt more to the new scene.
 
 ### Inference
 
